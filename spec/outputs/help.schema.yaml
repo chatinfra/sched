@@ -1,0 +1,53 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+type: object
+required: [tool, summary, usage, flags, commands, discovery]
+additionalProperties: false
+properties:
+  tool:
+    const: sched
+  summary:
+    type: string
+    minLength: 1
+  usage:
+    type: string
+    minLength: 1
+  flags:
+    type: array
+    items:
+      $ref: '#/$defs/namedSummary'
+  commands:
+    type: array
+    items:
+      type: object
+      required: [name, summary]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+        summary:
+          type: string
+          minLength: 1
+  discovery:
+    type: object
+    required: [commandHelp, schemas]
+    additionalProperties: false
+    properties:
+      commandHelp:
+        type: string
+        minLength: 1
+      schemas:
+        type: string
+        minLength: 1
+$defs:
+  namedSummary:
+    type: object
+    required: [name, summary]
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+        minLength: 1
+      summary:
+        type: string
+        minLength: 1

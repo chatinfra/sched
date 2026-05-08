@@ -1,0 +1,32 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+type: object
+required: [error]
+additionalProperties: false
+properties:
+  error:
+    type: object
+    required: [code, message]
+    additionalProperties: false
+    properties:
+      code:
+        type: string
+        minLength: 1
+      message:
+        type: string
+        minLength: 1
+      argument:
+        type: string
+      received:
+        type: string
+      expected:
+        type: string
+      hint:
+        type: string
+      examples:
+        type: array
+        items:
+          type: string
+      suggestion:
+        type: string
+      usage:
+        type: string

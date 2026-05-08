@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCHED_ROOT="$(CDPATH="" cd "$SCRIPT_DIR/.." && pwd)"
+OPENCODE_HOME="${OPENCODE_HOME:-/data/opencode}"
+OPENCODE_CACHE_ROOT="${OPENCODE_CACHE_ROOT:-$OPENCODE_HOME/.cache}"
+OUT="${1:-$OPENCODE_CACHE_ROOT/sched/bin/sched}"
+
+mkdir -p "$(dirname "$OUT")" "$OPENCODE_CACHE_ROOT/go-build" "$OPENCODE_CACHE_ROOT/go-mod"
+export GOCACHE="$OPENCODE_CACHE_ROOT/go-build"
+export GOMODCACHE="$OPENCODE_CACHE_ROOT/go-mod"
+export GOTOOLCHAIN="${GOTOOLCHAIN:-auto}"
+export CGO_ENABLED="${CGO_ENABLED:-0}"
+
+exec go -C "$SCHED_ROOT" build -trimpath -o "$OUT" ./cmd/sched

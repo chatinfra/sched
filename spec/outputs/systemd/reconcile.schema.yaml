@@ -1,0 +1,31 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+type: object
+required: [dryRun, removed, units]
+additionalProperties: false
+properties:
+  dryRun:
+    type: boolean
+  removed:
+    type: array
+    items:
+      type: string
+  warnings:
+    type: array
+    items:
+      type: string
+  units:
+    type: array
+    items:
+      type: object
+      required: [scheduleId, serviceName, timerName, scheduleKind]
+      additionalProperties: false
+      properties:
+        scheduleId: {type: string, minLength: 1}
+        serviceName: {type: string}
+        timerName: {type: string}
+        scheduleKind: {type: string}
+        calendar:
+          type: array
+          items:
+            type: string
+        intervalDuration: {type: string}
