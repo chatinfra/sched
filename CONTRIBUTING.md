@@ -62,7 +62,7 @@ git -C /path/to/chatinfra-sched-mirror format-patch -1 --stdout <accepted-commit
 Prefer the helper for normal imports; it validates patch shape before applying. After the monorepo change lands, run the mirror sync tooling from the monorepo to update the public repository:
 
 ```sh
-bin/sync_sched_public_mirror /path/to/chatinfra-sched-mirror
+bin/sync_sched
 ```
 
-The sync refuses dirty canonical `go/sched` state, stages temporary data under `$SUPER_TMP_DIR` or `./tmp`, and copies only the scheduler subtree into the public mirror checkout.
+The sync treats `./go/sched` as canonical source when run from the monorepo root, clones or reuses the public mirror checkout under `$SUPER_TMP_DIR/sched-public-mirror-checkout` or `./tmp/sched-public-mirror-checkout`, refuses dirty canonical or mirror state, requires mirror `HEAD` to match its fetched upstream exactly, copies only the scheduler subtree into the public mirror checkout, commits generated changes, and pushes the mirror branch.

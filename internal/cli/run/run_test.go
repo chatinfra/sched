@@ -18,17 +18,23 @@ func TestRunManualAndScheduledSourcesRecordHistory(t *testing.T) {
 
 	manual := h.Run(t, "--opencode-bin", opencode, "run", "sched-1", "--source", "manual").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, manual, "run.schema.yaml")
-	manualRecord := clitest.DecodeYAMLAs[sched.RunRecord](t, manual.Stdout)
-	assertRunRecord(t, manualRecord, sched.RunSourceManual, sched.RunStatusSuccess)
+	manualSummary := clitest.DecodeYAMLAs[clitest.RunSummary](t, manual.Stdout)
+	assertRunSummary(t, manualSummary, sched.RunSourceManual, sched.RunStatusSuccess)
+	for _, omitted := range []string{"logPath", "commandLine"} {
+		if strings.Contains(manual.Stdout, omitted+":") {
+			t.Fatalf("compact run output includes verbose field %q:\n%s", omitted, manual.Stdout)
+		}
+	}
+	manualRecord := latestRunRecord(t, h, "sched-1")
 	assertLogContains(t, manualRecord.LogPath, "--title ci-command:cmd-1:sched-1")
 
-	scheduled := h.Run(t, "--opencode-bin", opencode, "run", "sched-1", "--source", "scheduled").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, scheduled, "run.schema.yaml")
+	scheduled := h.Run(t, "--opencode-bin", opencode, "run", "sched-1", "--source", "scheduled", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, scheduled, "run-full.schema.yaml")
 	scheduledRecord := clitest.DecodeYAMLAs[sched.RunRecord](t, scheduled.Stdout)
 	assertRunRecord(t, scheduledRecord, sched.RunSourceScheduled, sched.RunStatusSuccess)
 
-	jobResult := h.Run(t, "get", "sched-1").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, jobResult, "get.schema.yaml")
+	jobResult := h.Run(t, "get", "sched-1", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, jobResult, "get-full.schema.yaml")
 	job := clitest.DecodeYAMLAs[sched.Job](t, jobResult.Stdout)
 	if job.LastRunStatus != sched.RunStatusSuccess || job.LastRunAt == nil {
 		t.Fatalf("job run metadata = %#v", job)
@@ -37,13 +43,16 @@ func TestRunManualAndScheduledSourcesRecordHistory(t *testing.T) {
 	history := h.Run(t, "history", "--schedule-id", "sched-1").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, history, "history.schema.yaml")
 	var payload struct {
-		Runs []sched.RunRecord `json:"runs"`
+		Runs []clitest.RunSummary `json:"runs"`
 	}
 	payload = clitest.DecodeYAMLAs[struct {
-		Runs []sched.RunRecord `json:"runs"`
+		Runs []clitest.RunSummary `json:"runs"`
 	}](t, history.Stdout)
 	if len(payload.Runs) != 2 {
 		t.Fatalf("history runs = %#v", payload.Runs)
+	}
+	if strings.Contains(history.Stdout, "logPath:") || strings.Contains(history.Stdout, "commandLine:") {
+		t.Fatalf("compact history includes verbose run fields:\n%s", history.Stdout)
 	}
 }
 
@@ -87,7 +96,7 @@ func TestRunOverlappingRunSkipsWithoutInvokingOpenCode(t *testing.T) {
 
 	result := h.Run(t, "--opencode-bin", opencode, "run", "sched-1", "--source", "scheduled").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "run.schema.yaml")
-	record := clitest.DecodeYAMLAs[sched.RunRecord](t, result.Stdout)
+	record := clitest.DecodeYAMLAs[clitest.RunSummary](t, result.Stdout)
 	if record.Status != sched.RunStatusSkipped || record.Source != sched.RunSourceScheduled || !strings.Contains(record.Message, "already running") {
 		t.Fatalf("skipped record = %#v", record)
 	}
@@ -120,6 +129,16 @@ func assertRunRecord(t *testing.T, record sched.RunRecord, source string, status
 	}
 }
 
+func assertRunSummary(t *testing.T, record clitest.RunSummary, source string, status string) {
+	t.Helper()
+	if record.ScheduleID != "sched-1" || record.Source != source || record.Status != status || record.ID == "" || record.StartedAt == "" {
+		t.Fatalf("run summary = %#v", record)
+	}
+	if record.ExitCode == nil || *record.ExitCode != 0 {
+		t.Fatalf("run summary exit code = %#v", record.ExitCode)
+	}
+}
+
 func assertLogContains(t *testing.T, path string, want string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -133,8 +152,8 @@ func assertLogContains(t *testing.T, path string, want string) {
 
 func latestRunRecord(t *testing.T, h *clitest.Harness, scheduleID string) sched.RunRecord {
 	t.Helper()
-	history := h.Run(t, "history", "--schedule-id", scheduleID).RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, history, "history.schema.yaml")
+	history := h.Run(t, "history", "--schedule-id", scheduleID, "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, history, "history-full.schema.yaml")
 	payload := clitest.DecodeYAMLAs[struct {
 		Runs []sched.RunRecord `json:"runs"`
 	}](t, history.Stdout)

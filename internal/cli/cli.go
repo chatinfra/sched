@@ -33,7 +33,7 @@ type errorEnvelope struct {
 }
 
 const (
-	createUsageCommand = "sched create --command <name> --agent <name> --every <duration> --workdir <dir> [--schedule-id <id>]"
+	createUsageCommand = "sched create --command <name> --agent <name> --every <duration> --workdir <dir> [--schedule-id <id>] [--full]"
 	createUsage        = "usage: " + createUsageCommand
 	historyUsage       = "sched history [--schedule-id <scheduleId>] [--limit N]"
 	everyExpected      = "a single Go-style duration such as 1m, 60s, or 2h"
@@ -208,6 +208,7 @@ func runCreateCommand(store *sched.Store, opts options, stdout io.Writer, args [
 	every := fs.String("every", "", "interval duration such as 5s, 1m, or 2h")
 	workdir := fs.String("workdir", "", "OpenCode working directory")
 	scheduleID := fs.String("schedule-id", "", "safe schedule identifier")
+	full := fs.Bool("full", false, "emit complete persisted job metadata")
 	if err := fs.Parse(args); err != nil {
 		return createFlagParseError(err)
 	}
@@ -272,7 +273,10 @@ func runCreateCommand(store *sched.Store, opts options, stdout io.Writer, args [
 	if _, err := reconcile(store, opts); err != nil {
 		return err
 	}
-	return writeYAML(stdout, persisted)
+	if *full {
+		return writeYAML(stdout, persisted)
+	}
+	return writeYAML(stdout, compactJob(persisted, "created", true))
 }
 
 func createFlagParseError(err error) *sched.CommandError {
@@ -391,6 +395,7 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 		fs := flag.NewFlagSet("sched put", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		fromStdin := fs.Bool("stdin", false, "read job JSON from stdin")
+		full := fs.Bool("full", false, "emit complete persisted job metadata")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -412,22 +417,42 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 		if _, err := reconcile(store, opts); err != nil {
 			return err
 		}
-		return writeYAML(stdout, persisted)
-	case "get":
-		if len(args) != 2 {
-			return errors.New("usage: sched get <scheduleId>")
+		if *full {
+			return writeYAML(stdout, persisted)
 		}
-		job, err := store.GetJob(args[1])
+		return writeYAML(stdout, compactJob(persisted, "upserted", true))
+	case "get":
+		full, positional, err := parseFullFlag(args[1:])
 		if err != nil {
 			return err
 		}
-		return writeYAML(stdout, job)
+		if len(positional) != 1 {
+			return errors.New("usage: sched get <scheduleId>")
+		}
+		job, err := store.GetJob(positional[0])
+		if err != nil {
+			return err
+		}
+		if full {
+			return writeYAML(stdout, job)
+		}
+		return writeYAML(stdout, compactJob(job, "", true))
 	case "list":
+		full, positional, err := parseFullFlag(args[1:])
+		if err != nil {
+			return err
+		}
+		if len(positional) != 0 {
+			return errors.New("usage: sched list [--full]")
+		}
 		jobs, err := store.ListJobs()
 		if err != nil {
 			return err
 		}
-		return writeYAML(stdout, map[string]any{"jobs": jobs})
+		if full {
+			return writeYAML(stdout, map[string]any{"jobs": jobs})
+		}
+		return writeYAML(stdout, listResponse{Jobs: compactJobs(jobs)}, withFlowSequenceMaps())
 	case "delete":
 		if len(args) != 2 {
 			return errors.New("usage: sched delete <scheduleId>")
@@ -446,10 +471,14 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 			return errors.New("usage: sched run <scheduleId> [--source manual|scheduled]")
 		}
 		scheduleID := args[1]
+		full, runArgs, err := parseFullFlag(args[2:])
+		if err != nil {
+			return err
+		}
 		fs := flag.NewFlagSet("sched run", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		source := fs.String("source", sched.RunSourceManual, "run source: manual or scheduled")
-		if err := fs.Parse(args[2:]); err != nil {
+		if err := fs.Parse(runArgs); err != nil {
 			return err
 		}
 		if *source != sched.RunSourceManual && *source != sched.RunSourceScheduled {
@@ -459,7 +488,10 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 		if err != nil {
 			return err
 		}
-		return writeYAML(stdout, record)
+		if full {
+			return writeYAML(stdout, record)
+		}
+		return writeYAML(stdout, compactRun(record))
 	case "stop":
 		if len(args) != 2 {
 			return errors.New("usage: sched stop <scheduleId>")
@@ -486,6 +518,7 @@ func runHistoryCommand(store *sched.Store, opts options, stdout io.Writer, args 
 	fs.SetOutput(io.Discard)
 	scheduleID := fs.String("schedule-id", "", "schedule ID")
 	limit := fs.Int("limit", 100, "maximum records")
+	full := fs.Bool("full", false, "emit complete run metadata")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -498,26 +531,42 @@ func runHistoryCommand(store *sched.Store, opts options, stdout io.Writer, args 
 		if err != nil {
 			return err
 		}
-		payload := map[string]any{"scheduleId": id, "runs": runs}
-		return writeYAML(stdout, payload)
+		if *full {
+			payload := map[string]any{"scheduleId": id, "runs": runs}
+			return writeYAML(stdout, payload)
+		}
+		return writeYAML(stdout, historyResponse{ScheduleID: id, Runs: compactRuns(runs)}, withFlowSequenceMaps())
 	}
 	runs, err := store.ListAllRuns(*limit)
 	if err != nil {
 		return err
 	}
-	payload := map[string]any{"runs": runs}
-	return writeYAML(stdout, payload)
+	if *full {
+		payload := map[string]any{"runs": runs}
+		return writeYAML(stdout, payload)
+	}
+	return writeYAML(stdout, historyResponse{Runs: compactRuns(runs)}, withFlowSequenceMaps())
 }
 
 func runSystemdCommand(store *sched.Store, opts options, stdout io.Writer, args []string) error {
-	if len(args) != 1 || args[0] != "reconcile" {
+	if len(args) == 0 || args[0] != "reconcile" {
 		return errors.New("usage: sched systemd reconcile")
+	}
+	full, positional, err := parseFullFlag(args[1:])
+	if err != nil {
+		return err
+	}
+	if len(positional) != 0 {
+		return errors.New("usage: sched systemd reconcile [--full]")
 	}
 	result, err := reconcile(store, opts)
 	if err != nil {
 		return err
 	}
-	return writeYAML(stdout, result)
+	if full {
+		return writeYAML(stdout, result)
+	}
+	return writeYAML(stdout, compactReconcile(result), withFlowSequenceMaps())
 }
 
 func reconcile(store *sched.Store, opts options) (sched.ReconcileResult, error) {
@@ -531,25 +580,91 @@ func reconcile(store *sched.Store, opts options) (sched.ReconcileResult, error) 
 	})
 }
 
+func parseFullFlag(args []string) (bool, []string, error) {
+	full := false
+	positional := make([]string, 0, len(args))
+	for _, arg := range args {
+		switch arg {
+		case "--full":
+			full = true
+		default:
+			if strings.HasPrefix(arg, "--full=") {
+				return false, nil, fmt.Errorf("flag --full does not take a value")
+			}
+			positional = append(positional, arg)
+		}
+	}
+	return full, positional, nil
+}
+
 func emitError(opts options, stdout, stderr io.Writer, err error) {
 	_ = writeYAML(stderr, errorEnvelope{Error: sched.ErrorDetails(err)})
 }
 
-func writeYAML(out io.Writer, value any) error {
+type yamlWriteOptions struct {
+	flowSequenceMaps bool
+}
+
+type yamlWriteOption func(*yamlWriteOptions)
+
+func withFlowSequenceMaps() yamlWriteOption {
+	return func(opts *yamlWriteOptions) {
+		opts.flowSequenceMaps = true
+	}
+}
+
+func writeYAML(out io.Writer, value any, options ...yamlWriteOption) error {
+	writeOpts := yamlWriteOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&writeOpts)
+		}
+	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	var doc any
+	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return err
 	}
-	data, err = yaml.Marshal(doc)
+	if writeOpts.flowSequenceMaps {
+		applyFlowStyleToSequenceMaps(&doc)
+	}
+	data, err = yaml.Marshal(&doc)
 	if err != nil {
 		return err
 	}
 	_, err = out.Write(data)
 	return err
+}
+
+func applyFlowStyleToSequenceMaps(node *yaml.Node) {
+	if node == nil {
+		return
+	}
+	if node.Kind == yaml.SequenceNode {
+		for _, item := range node.Content {
+			if scalarMapping(item) {
+				item.Style = yaml.FlowStyle
+			}
+		}
+	}
+	for _, child := range node.Content {
+		applyFlowStyleToSequenceMaps(child)
+	}
+}
+
+func scalarMapping(node *yaml.Node) bool {
+	if node == nil || node.Kind != yaml.MappingNode || len(node.Content) == 0 {
+		return false
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Kind != yaml.ScalarNode || node.Content[i+1].Kind != yaml.ScalarNode {
+			return false
+		}
+	}
+	return true
 }
 
 func nowUTC() time.Time {
@@ -638,16 +753,16 @@ func rootHelp() map[string]any {
 
 func commandHelps() []map[string]any {
 	return []map[string]any{
-		{"command": "create", "summary": "create a local interval schedule", "usage": createUsageCommand, "flags": []map[string]any{{"name": "--command <name>", "summary": "OpenCode command name"}, {"name": "--agent <name>", "summary": "OpenCode agent name"}, {"name": "--every <duration>", "summary": "Go duration such as 5s, 1m, or 2h"}, {"name": "--workdir <dir>", "summary": "OpenCode working directory"}, {"name": "--schedule-id <id>", "summary": "optional safe schedule identifier"}}, "schema": "create"},
-		{"command": "put", "summary": "upsert a schedule job from JSON stdin", "usage": "sched put --stdin", "flags": []map[string]any{{"name": "--stdin", "summary": "read job JSON from stdin"}}, "schema": "put"},
-		{"command": "get", "summary": "read one schedule job", "usage": "sched get <scheduleId>", "schema": "get"},
-		{"command": "list", "summary": "list schedule jobs", "usage": "sched list", "schema": "list"},
+		{"command": "create", "summary": "create a local interval schedule", "usage": createUsageCommand, "flags": []map[string]any{{"name": "--command <name>", "summary": "OpenCode command name"}, {"name": "--agent <name>", "summary": "OpenCode agent name"}, {"name": "--every <duration>", "summary": "Go duration such as 5s, 1m, or 2h"}, {"name": "--workdir <dir>", "summary": "OpenCode working directory"}, {"name": "--schedule-id <id>", "summary": "optional safe schedule identifier"}, {"name": "--full", "summary": "emit complete persisted job metadata"}}, "schema": "create", "fullSchema": "create-full"},
+		{"command": "put", "summary": "upsert a schedule job from JSON stdin", "usage": "sched put --stdin [--full]", "flags": []map[string]any{{"name": "--stdin", "summary": "read job JSON from stdin"}, {"name": "--full", "summary": "emit complete persisted job metadata"}}, "schema": "put", "fullSchema": "put-full"},
+		{"command": "get", "summary": "read one schedule job", "usage": "sched get <scheduleId> [--full]", "flags": []map[string]any{{"name": "--full", "summary": "emit complete persisted job metadata"}}, "schema": "get", "fullSchema": "get-full"},
+		{"command": "list", "summary": "list schedule jobs", "usage": "sched list [--full]", "flags": []map[string]any{{"name": "--full", "summary": "emit complete persisted job metadata"}}, "schema": "list", "fullSchema": "list-full"},
 		{"command": "delete", "summary": "delete one schedule job and reconcile units", "usage": "sched delete <scheduleId>", "schema": "delete"},
-		{"command": "run", "summary": "run one schedule through the scheduler envelope", "usage": "sched run <scheduleId> [--source manual|scheduled]", "flags": []map[string]any{{"name": "--source manual|scheduled", "summary": "run source"}}, "schema": "run"},
+		{"command": "run", "summary": "run one schedule through the scheduler envelope", "usage": "sched run <scheduleId> [--source manual|scheduled] [--full]", "flags": []map[string]any{{"name": "--source manual|scheduled", "summary": "run source"}, {"name": "--full", "summary": "emit complete run metadata"}}, "schema": "run", "fullSchema": "run-full"},
 		{"command": "stop", "summary": "stop active systemd work for a schedule", "usage": "sched stop <scheduleId>", "schema": "stop"},
-		{"command": "history", "summary": "list scheduler envelope run history", "usage": historyUsage, "flags": []map[string]any{{"name": "--schedule-id <scheduleId>", "summary": "filter by schedule"}, {"name": "--limit N", "summary": "maximum records"}}, "schema": "history"},
+		{"command": "history", "summary": "list scheduler envelope run history", "usage": historyUsage + " [--full]", "flags": []map[string]any{{"name": "--schedule-id <scheduleId>", "summary": "filter by schedule"}, {"name": "--limit N", "summary": "maximum records"}, {"name": "--full", "summary": "emit complete run metadata"}}, "schema": "history", "fullSchema": "history-full"},
 		{"command": "export", "summary": "export schedule state", "usage": "sched export", "schema": "export"},
-		{"command": "systemd reconcile", "summary": "render and reconcile user-systemd units", "usage": "sched systemd reconcile", "schema": "systemd/reconcile"},
+		{"command": "systemd reconcile", "summary": "render and reconcile user-systemd units", "usage": "sched systemd reconcile [--full]", "flags": []map[string]any{{"name": "--full", "summary": "emit complete reconciliation metadata"}}, "schema": "systemd/reconcile", "fullSchema": "systemd/reconcile-full"},
 		{"command": "schemas", "summary": "list output schemas", "usage": "sched schemas", "schema": "schemas"},
 	}
 }
@@ -660,15 +775,22 @@ func schemaDiscovery() map[string]any {
 			{"id": "command-help", "path": "spec/outputs/command-help.schema.yaml"},
 			{"id": "error", "path": "spec/outputs/error.schema.yaml"},
 			{"id": "create", "path": "spec/outputs/create.schema.yaml"},
+			{"id": "create-full", "path": "spec/outputs/create-full.schema.yaml"},
 			{"id": "put", "path": "spec/outputs/put.schema.yaml"},
+			{"id": "put-full", "path": "spec/outputs/put-full.schema.yaml"},
 			{"id": "get", "path": "spec/outputs/get.schema.yaml"},
+			{"id": "get-full", "path": "spec/outputs/get-full.schema.yaml"},
 			{"id": "list", "path": "spec/outputs/list.schema.yaml"},
+			{"id": "list-full", "path": "spec/outputs/list-full.schema.yaml"},
 			{"id": "delete", "path": "spec/outputs/delete.schema.yaml"},
 			{"id": "run", "path": "spec/outputs/run.schema.yaml"},
+			{"id": "run-full", "path": "spec/outputs/run-full.schema.yaml"},
 			{"id": "stop", "path": "spec/outputs/stop.schema.yaml"},
 			{"id": "history", "path": "spec/outputs/history.schema.yaml"},
+			{"id": "history-full", "path": "spec/outputs/history-full.schema.yaml"},
 			{"id": "export", "path": "spec/outputs/export.schema.yaml"},
 			{"id": "systemd/reconcile", "path": "spec/outputs/systemd/reconcile.schema.yaml"},
+			{"id": "systemd/reconcile-full", "path": "spec/outputs/systemd/reconcile-full.schema.yaml"},
 			{"id": "schemas", "path": "spec/outputs/schemas.schema.yaml"},
 		},
 	}

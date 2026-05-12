@@ -1,25 +1,22 @@
 $schema: https://json-schema.org/draft/2020-12/schema
-type: object
-required: [runs]
-additionalProperties: false
-properties:
-  scheduleId:
-    type: string
-  runs:
-    type: array
-    items:
-      $ref: '#/$defs/runSummary'
+$ref: '#/$defs/runRecord'
 $defs:
-  runSummary:
+  runRecord:
     type: object
-    required: [id, scheduleId, source, status, startedAt]
+    required: [runId, scheduleId, source, status, startedAt]
     additionalProperties: false
     properties:
-      id: {type: string, minLength: 1}
+      runId: {type: string, minLength: 1}
       scheduleId: {type: string, minLength: 1}
       source: {type: string}
       status: {type: string}
       startedAt: {type: string}
+      finishedAt: {type: string}
       durationMs: {type: integer}
       exitCode: {type: integer}
+      logPath: {type: string}
       message: {type: string}
+      commandLine:
+        type: array
+        items:
+          type: string

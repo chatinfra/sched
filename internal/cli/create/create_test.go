@@ -19,7 +19,19 @@ func TestCreateIntervalCommandYAMLPersistsAndReconciles(t *testing.T) {
 
 	result := h.Run(t, "create", "--command", "hello", "--agent", "syslog", "--every", "5s", "--workdir", workdir).RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "create.schema.yaml")
-	job := clitest.DecodeYAMLAs[sched.Job](t, result.Stdout)
+	summary := clitest.DecodeYAMLAs[clitest.JobSummary](t, result.Stdout)
+	if summary.ID == "" || summary.Action != "created" || summary.Status != sched.StatusActive || summary.Schedule != "every 5s" || summary.Target != "hello @ syslog" || summary.Workdir != workdir {
+		t.Fatalf("compact create summary = %#v", summary)
+	}
+	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
+		if strings.Contains(result.Stdout, omitted+":") {
+			t.Fatalf("compact create output includes verbose field %q:\n%s", omitted, result.Stdout)
+		}
+	}
+
+	fullResult := h.Run(t, "get", summary.ID, "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, fullResult, "get-full.schema.yaml")
+	job := clitest.DecodeYAMLAs[sched.Job](t, fullResult.Stdout)
 
 	if job.ScheduleKind != sched.ScheduleKindInterval || job.IntervalDuration != "5s" {
 		t.Fatalf("interval metadata = kind %q duration %q", job.ScheduleKind, job.IntervalDuration)

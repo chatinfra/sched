@@ -1,29 +1,15 @@
 $schema: https://json-schema.org/draft/2020-12/schema
-$ref: '#/$defs/job'
+$ref: '#/$defs/jobSummary'
 $defs:
-  job:
+  jobSummary:
     type: object
-    required: [schemaVersion, scheduleId, tenantId, opencodeId, agentId, agentName, commandId, commandName, scheduleKind, status, workdir, title, createdAt, updatedAt]
+    required: [id, action, status, schedule, target, workdir]
     additionalProperties: false
     properties:
-      schemaVersion: {type: string}
-      scheduleId: {type: string, minLength: 1}
-      tenantId: {type: string}
-      opencodeId: {type: string}
-      agentId: {type: string}
-      agentName: {type: string}
-      commandId: {type: string}
-      commandName: {type: string}
-      scheduleKind: {type: string}
-      scheduleExpression: {type: string}
-      timezone: {type: string}
-      intervalDuration: {type: string}
-      status: {type: string}
-      timerSuppressed: {type: boolean}
-      suppressionReason: {type: string}
-      workdir: {type: string}
-      title: {type: string}
-      createdAt: {type: string}
-      updatedAt: {type: string}
-      lastRunAt: {type: string}
-      lastRunStatus: {type: string}
+      id: {type: string, minLength: 1}
+      action: {const: created}
+      status: {type: string, minLength: 1}
+      schedule: {type: string, minLength: 1}
+      target: {type: string, minLength: 1}
+      workdir: {type: string, minLength: 1}
+      last: {type: string}

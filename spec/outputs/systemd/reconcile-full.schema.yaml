@@ -17,10 +17,15 @@ properties:
     type: array
     items:
       type: object
-      required: [id, service, timer, schedule]
+      required: [scheduleId, serviceName, timerName, scheduleKind]
       additionalProperties: false
       properties:
-        id: {type: string, minLength: 1}
-        service: {type: string, minLength: 1}
-        timer: {type: string, minLength: 1}
-        schedule: {type: string, minLength: 1}
+        scheduleId: {type: string, minLength: 1}
+        serviceName: {type: string}
+        timerName: {type: string}
+        scheduleKind: {type: string}
+        calendar:
+          type: array
+          items:
+            type: string
+        intervalDuration: {type: string}

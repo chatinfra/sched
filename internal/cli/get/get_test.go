@@ -1,6 +1,7 @@
 package get
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/chatinfra/sched/internal/cli/clitest"
@@ -13,10 +14,19 @@ func TestGetFoundJobYAMLOutput(t *testing.T) {
 
 	result := h.Run(t, "get", "sched-1").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "get.schema.yaml")
-	job := clitest.DecodeYAMLAs[sched.Job](t, result.Stdout)
-	if job.ScheduleID != "sched-1" || job.CommandName != "Daily-Backup" {
-		t.Fatalf("get YAML job = %#v", job)
+	summary := clitest.DecodeYAMLAs[clitest.JobSummary](t, result.Stdout)
+	if summary.ID != "sched-1" || summary.Target != "Daily-Backup @ build-agent" || summary.Schedule != "cron 0 9 * * * UTC" || summary.Workdir == "" {
+		t.Fatalf("get YAML summary = %#v", summary)
 	}
+	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
+		if strings.Contains(result.Stdout, omitted+":") {
+			t.Fatalf("compact get output includes verbose field %q:\n%s", omitted, result.Stdout)
+		}
+	}
+
+	full := h.Run(t, "get", "sched-1", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, full, "get-full.schema.yaml")
+	job := clitest.DecodeYAMLAs[sched.Job](t, full.Stdout)
 	if job.ScheduleExpression != "0 9 * * *" || job.Timezone != "UTC" || job.Title != "ci-command:cmd-1:sched-1" {
 		t.Fatalf("get job details = %#v", job)
 	}

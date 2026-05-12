@@ -59,8 +59,11 @@ func TestCommandHelpIncludesDefaultOutputSchema(t *testing.T) {
 	if !ok {
 		t.Fatalf("command help YAML = %#v, want object", doc)
 	}
-	if commandHelp["command"] != "create" || commandHelp["schema"] != "create" {
+	if commandHelp["command"] != "create" || commandHelp["schema"] != "create" || commandHelp["fullSchema"] != "create-full" {
 		t.Fatalf("command help schema = %#v, want create schema", commandHelp)
+	}
+	if !strings.Contains(result.Stdout, "--full") {
+		t.Fatalf("command help missing --full enrichment flag:\n%s", result.Stdout)
 	}
 }
 
@@ -86,7 +89,7 @@ func TestSchemasDiscoveryOutput(t *testing.T) {
 		id, _ := schema["id"].(string)
 		seen[id] = true
 	}
-	for _, want := range []string{"help", "command-help", "schemas"} {
+	for _, want := range []string{"help", "command-help", "schemas", "get-full", "list-full", "history-full"} {
 		if !seen[want] {
 			t.Fatalf("schemas discovery missing %q: %#v", want, schemas)
 		}
@@ -138,15 +141,15 @@ func TestGlobalFlagNormalizationForSystemctlAliases(t *testing.T) {
 	h := clitest.New(t)
 	jobJSON := clitest.SampleJobJSON(t)
 
-	noSystemctl := h.RunWithFlags(t, jobJSON, []string{"--no-systemctl"}, "put", "--stdin").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, noSystemctl, "put.schema.yaml")
+	noSystemctl := h.RunWithFlags(t, jobJSON, []string{"--no-systemctl"}, "put", "--stdin", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, noSystemctl, "put-full.schema.yaml")
 	put := clitest.DecodeYAMLAs[sched.Job](t, noSystemctl.Stdout)
 	if put.ScheduleID != "sched-1" {
 		t.Fatalf("put scheduleID = %q", put.ScheduleID)
 	}
 
-	falseSystemctl := h.RunWithFlags(t, jobJSON, []string{"--systemctl=false"}, "put", "--stdin").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, falseSystemctl, "put.schema.yaml")
+	falseSystemctl := h.RunWithFlags(t, jobJSON, []string{"--systemctl=false"}, "put", "--stdin", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, falseSystemctl, "put-full.schema.yaml")
 	updated := clitest.DecodeYAMLAs[sched.Job](t, falseSystemctl.Stdout)
 	if updated.ScheduleID != "sched-1" {
 		t.Fatalf("updated scheduleID = %q", updated.ScheduleID)
@@ -168,13 +171,13 @@ func TestGlobalValueFlagsAndMissingValues(t *testing.T) {
 	customSystemd := filepath.Join(h.Root, "custom-systemd")
 
 	result := clitest.RunArgsWithStdin(t, clitest.SampleJobJSON(t), []string{
-		"put", "--stdin",
+		"put", "--stdin", "--full",
 		"--state-root", customState,
 		"--opencode-home", customHome,
 		"--systemd-dir", customSystemd,
 		"--no-systemctl",
 	}).RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "put.schema.yaml")
+	clitest.RequireYAMLStdout(t, result, "put-full.schema.yaml")
 	job := clitest.DecodeYAMLAs[sched.Job](t, result.Stdout)
 	if job.ScheduleID != "sched-1" {
 		t.Fatalf("job scheduleID = %q", job.ScheduleID)

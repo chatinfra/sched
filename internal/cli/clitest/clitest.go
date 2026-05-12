@@ -34,6 +34,41 @@ type ErrorEnvelope struct {
 	Error sched.CommandError `json:"error"`
 }
 
+type JobSummary struct {
+	ID       string `json:"id"`
+	Action   string `json:"action"`
+	Status   string `json:"status"`
+	Schedule string `json:"schedule"`
+	Target   string `json:"target"`
+	Workdir  string `json:"workdir"`
+	Last     string `json:"last"`
+}
+
+type RunSummary struct {
+	ID         string `json:"id"`
+	ScheduleID string `json:"scheduleId"`
+	Source     string `json:"source"`
+	Status     string `json:"status"`
+	StartedAt  string `json:"startedAt"`
+	DurationMs int64  `json:"durationMs"`
+	ExitCode   *int   `json:"exitCode"`
+	Message    string `json:"message"`
+}
+
+type ReconcileSummary struct {
+	Units    []ReconcileUnitSummary `json:"units"`
+	Removed  []string               `json:"removed"`
+	Warnings []string               `json:"warnings"`
+	DryRun   bool                   `json:"dryRun"`
+}
+
+type ReconcileUnitSummary struct {
+	ID       string `json:"id"`
+	Service  string `json:"service"`
+	Timer    string `json:"timer"`
+	Schedule string `json:"schedule"`
+}
+
 type JobOption func(*sched.Job)
 
 func New(t *testing.T) *Harness {
@@ -340,8 +375,8 @@ func WithWorkdir(workdir string) JobOption {
 
 func (h *Harness) PutJob(t *testing.T, job sched.Job) sched.Job {
 	t.Helper()
-	result := h.RunWithStdin(t, JobJSON(t, job), "put", "--stdin").RequireSuccess(t)
-	RequireYAMLStdout(t, result, "put.schema.yaml")
+	result := h.RunWithStdin(t, JobJSON(t, job), "put", "--stdin", "--full").RequireSuccess(t)
+	RequireYAMLStdout(t, result, "put-full.schema.yaml")
 	return DecodeYAMLAs[sched.Job](t, result.Stdout)
 }
 

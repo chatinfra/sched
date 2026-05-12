@@ -32,6 +32,11 @@ func TestDeleteExistingJobAndReconcilesArtifacts(t *testing.T) {
 	if payload.ScheduleID != "sched-1" || !payload.Deleted {
 		t.Fatalf("delete payload = %#v", payload)
 	}
+	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
+		if strings.Contains(result.Stdout, omitted+":") {
+			t.Fatalf("compact delete output includes verbose field %q:\n%s", omitted, result.Stdout)
+		}
+	}
 	if _, err := os.Stat(h.JobPath("sched-1")); !os.IsNotExist(err) {
 		t.Fatalf("job file still exists or stat failed: %v", err)
 	}

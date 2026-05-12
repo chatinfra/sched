@@ -27,12 +27,18 @@ func TestReconcileActivePausedStaleAndYAMLOutput(t *testing.T) {
 
 	result := h.Run(t, "systemd", "reconcile").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
-	reconciled := clitest.DecodeYAMLAs[sched.ReconcileResult](t, result.Stdout)
-	if reconciled.DryRun || len(reconciled.Units) != 1 || reconciled.Units[0].ScheduleID != "sched-active" {
+	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
+	if reconciled.DryRun || len(reconciled.Units) != 1 || reconciled.Units[0].ID != "sched-active" {
 		t.Fatalf("reconcile units = %#v", reconciled)
 	}
 	if !contains(reconciled.Removed, "sched-command-stale.timer") {
 		t.Fatalf("removed units = %#v", reconciled.Removed)
+	}
+	full := h.Run(t, "systemd", "reconcile", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, full, "systemd/reconcile-full.schema.yaml")
+	fullReconciled := clitest.DecodeYAMLAs[sched.ReconcileResult](t, full.Stdout)
+	if len(fullReconciled.Units) != 1 || fullReconciled.Units[0].ScheduleID != "sched-active" || fullReconciled.Units[0].ScheduleKind == "" {
+		t.Fatalf("full reconcile units = %#v", fullReconciled.Units)
 	}
 	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
 		t.Fatalf("stale unit still exists or stat failed: %v", err)
@@ -59,8 +65,8 @@ func TestReconcileSuppressesActiveJobWithoutChangingStoredStatus(t *testing.T) {
 
 	result := h.Run(t, "systemd", "reconcile").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
-	reconciled := clitest.DecodeYAMLAs[sched.ReconcileResult](t, result.Stdout)
-	if len(reconciled.Units) != 1 || reconciled.Units[0].ScheduleID != "sched-active" {
+	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
+	if len(reconciled.Units) != 1 || reconciled.Units[0].ID != "sched-active" {
 		t.Fatalf("reconcile units = %#v", reconciled.Units)
 	}
 	if !contains(reconciled.Removed, filepath.Base(staleService)) || !contains(reconciled.Removed, filepath.Base(staleTimer)) {
@@ -70,8 +76,8 @@ func TestReconcileSuppressesActiveJobWithoutChangingStoredStatus(t *testing.T) {
 		t.Fatalf("warnings = %#v", reconciled.Warnings)
 	}
 
-	stored := h.Run(t, "get", "sched-suppressed").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, stored, "get.schema.yaml")
+	stored := h.Run(t, "get", "sched-suppressed", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, stored, "get-full.schema.yaml")
 	job := clitest.DecodeYAMLAs[sched.Job](t, stored.Stdout)
 	if job.Status != sched.StatusActive || !job.TimerSuppressed || job.SuppressionReason != "agent_disabled" {
 		t.Fatalf("stored suppressed job = %#v", job)
@@ -88,9 +94,15 @@ func TestReconcileDryRunSummaryPreservesStaleUnits(t *testing.T) {
 
 	result := h.Run(t, "--dry-run", "systemd", "reconcile").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
-	reconciled := clitest.DecodeYAMLAs[sched.ReconcileResult](t, result.Stdout)
+	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
 	if !reconciled.DryRun || len(reconciled.Units) != 1 || len(reconciled.Removed) != 1 {
 		t.Fatalf("dry-run YAML output = %#v", reconciled)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "- ") && strings.Contains(line, "id:") && !strings.Contains(line, "{") {
+			t.Fatalf("reconcile unit is not rendered as flow-style mapping: %q\n%s", line, result.Stdout)
+		}
 	}
 	if _, err := os.Stat(stalePath); err != nil {
 		t.Fatalf("dry-run removed stale unit: %v", err)
@@ -103,12 +115,12 @@ func TestReconcileUsesConfiguredStableSchedLauncherPath(t *testing.T) {
 
 	result := h.Run(t, "--sched-bin", "/data/opencode/bin/sched", "systemd", "reconcile").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
-	reconciled := clitest.DecodeYAMLAs[sched.ReconcileResult](t, result.Stdout)
+	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
 	if len(reconciled.Units) != 1 {
 		t.Fatalf("reconcile units = %#v", reconciled.Units)
 	}
 
-	servicePath := filepath.Join(h.SystemdDir, reconciled.Units[0].ServiceName)
+	servicePath := filepath.Join(h.SystemdDir, reconciled.Units[0].Service)
 	serviceContent, err := os.ReadFile(servicePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%s) error = %v", servicePath, err)

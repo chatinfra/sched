@@ -14,12 +14,23 @@ func TestPutValidStdinPersistsJob(t *testing.T) {
 
 	result := h.RunWithStdin(t, clitest.SampleJobJSON(t), "put", "--stdin").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "put.schema.yaml")
-	job := clitest.DecodeYAMLAs[sched.Job](t, result.Stdout)
-	if job.ScheduleID != "sched-1" || job.Title != "ci-command:cmd-1:sched-1" {
-		t.Fatalf("put job = %#v", job)
+	summary := clitest.DecodeYAMLAs[clitest.JobSummary](t, result.Stdout)
+	if summary.ID != "sched-1" || summary.Action != "upserted" || summary.Status != sched.StatusActive || summary.Target != "Daily-Backup @ build-agent" || summary.Workdir == "" {
+		t.Fatalf("put summary = %#v", summary)
+	}
+	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
+		if strings.Contains(result.Stdout, omitted+":") {
+			t.Fatalf("compact put output includes verbose field %q:\n%s", omitted, result.Stdout)
+		}
 	}
 	if result.Stderr != "" {
 		t.Fatalf("put stderr = %q", result.Stderr)
+	}
+	full := h.Run(t, "get", "sched-1", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, full, "get-full.schema.yaml")
+	job := clitest.DecodeYAMLAs[sched.Job](t, full.Stdout)
+	if job.ScheduleID != "sched-1" || job.Title != "ci-command:cmd-1:sched-1" {
+		t.Fatalf("put full job = %#v", job)
 	}
 	if _, err := os.Stat(h.JobPath("sched-1")); err != nil {
 		t.Fatalf("persisted job missing: %v", err)
@@ -61,12 +72,12 @@ func TestPutIdempotentUpdatePreservesCreatedAt(t *testing.T) {
 	listResult := h.Run(t, "list").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, listResult, "list.schema.yaml")
 	var payload struct {
-		Jobs []sched.Job `json:"jobs"`
+		Jobs []clitest.JobSummary `json:"jobs"`
 	}
 	payload = clitest.DecodeYAMLAs[struct {
-		Jobs []sched.Job `json:"jobs"`
+		Jobs []clitest.JobSummary `json:"jobs"`
 	}](t, listResult.Stdout)
-	if len(payload.Jobs) != 1 || payload.Jobs[0].CommandName != "Deploy-Production" {
+	if len(payload.Jobs) != 1 || !strings.Contains(payload.Jobs[0].Target, "Deploy-Production") {
 		t.Fatalf("list after update = %#v", payload.Jobs)
 	}
 }
