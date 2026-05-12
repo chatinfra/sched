@@ -6,20 +6,5 @@ properties:
   scheduleId:
     type: string
   runs:
-    type: array
-    items:
-      $ref: '#/$defs/runSummary'
-$defs:
-  runSummary:
-    type: object
-    required: [id, scheduleId, source, status, startedAt]
-    additionalProperties: false
-    properties:
-      id: {type: string, minLength: 1}
-      scheduleId: {type: string, minLength: 1}
-      source: {type: string}
-      status: {type: string}
-      startedAt: {type: string}
-      durationMs: {type: integer}
-      exitCode: {type: integer}
-      message: {type: string}
+    type: string
+    minLength: 1

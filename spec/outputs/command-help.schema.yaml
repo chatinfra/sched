@@ -1,6 +1,6 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 type: object
-required: [command, summary, usage, schema]
+required: [command, summary, usage, output, schema]
 additionalProperties: false
 properties:
   command:
@@ -10,6 +10,9 @@ properties:
     type: string
     minLength: 1
   usage:
+    type: string
+    minLength: 1
+  output:
     type: string
     minLength: 1
   flags:

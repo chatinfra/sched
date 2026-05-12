@@ -21,20 +21,13 @@ func TestDeleteExistingJobAndReconcilesArtifacts(t *testing.T) {
 
 	result := h.Run(t, "delete", "sched-1").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "delete.schema.yaml")
-	var payload struct {
-		ScheduleID string `json:"scheduleId"`
-		Deleted    bool   `json:"deleted"`
-	}
-	payload = clitest.DecodeYAMLAs[struct {
-		ScheduleID string `json:"scheduleId"`
-		Deleted    bool   `json:"deleted"`
-	}](t, result.Stdout)
-	if payload.ScheduleID != "sched-1" || !payload.Deleted {
-		t.Fatalf("delete payload = %#v", payload)
+	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, result.Stdout)
+	if summary.Summary != "deleted sched-1" {
+		t.Fatalf("delete summary = %#v", summary)
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
 		if strings.Contains(result.Stdout, omitted+":") {
-			t.Fatalf("compact delete output includes verbose field %q:\n%s", omitted, result.Stdout)
+			t.Fatalf("human delete output includes verbose field %q:\n%s", omitted, result.Stdout)
 		}
 	}
 	if _, err := os.Stat(h.JobPath("sched-1")); !os.IsNotExist(err) {
@@ -45,19 +38,29 @@ func TestDeleteExistingJobAndReconcilesArtifacts(t *testing.T) {
 	}
 }
 
+func TestDeleteFullYAMLOutput(t *testing.T) {
+	h := clitest.New(t)
+	h.PutJob(t, clitest.SampleJob())
+
+	result := h.Run(t, "delete", "sched-1", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, result, "delete-full.schema.yaml")
+	payload := clitest.DecodeYAMLAs[struct {
+		ScheduleID string `json:"scheduleId"`
+		Deleted    bool   `json:"deleted"`
+	}](t, result.Stdout)
+	if payload.ScheduleID != "sched-1" || !payload.Deleted {
+		t.Fatalf("delete full payload = %#v", payload)
+	}
+}
+
 func TestDeleteMissingAndInvalidScheduleID(t *testing.T) {
 	h := clitest.New(t)
 
 	missing := h.Run(t, "delete", "missing").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, missing, "delete.schema.yaml")
-	var payload struct {
-		Deleted bool `json:"deleted"`
-	}
-	payload = clitest.DecodeYAMLAs[struct {
-		Deleted bool `json:"deleted"`
-	}](t, missing.Stdout)
-	if payload.Deleted {
-		t.Fatalf("missing delete payload = %#v", payload)
+	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, missing.Stdout)
+	if !strings.Contains(summary.Summary, "not found missing") {
+		t.Fatalf("missing delete summary = %#v", summary)
 	}
 
 	invalid := h.Run(t, "delete", "bad/id").RequireError(t)

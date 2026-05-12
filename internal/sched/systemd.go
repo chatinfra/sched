@@ -234,9 +234,10 @@ Description=ChatInfra sched command %s
 [Service]
 Type=oneshot
 WorkingDirectory=%s
+EnvironmentFile=-%s/.env
 Environment=OPENCODE_LOG_DIR=%s
 ExecStart=/bin/sh -lc %s
-`, escapeUnitValue(job.ScheduleID), escapeUnitValue(job.Workdir), escapeUnitValue(opencodeLogDir), shellQuote("exec "+runCommand))
+`, escapeUnitValue(job.ScheduleID), escapeUnitValue(job.Workdir), escapeUnitValue(job.Workdir), escapeUnitValue(opencodeLogDir), shellQuote("exec "+runCommand))
 	timer := fmt.Sprintf(`[Unit]
 Description=Timer for ChatInfra sched command %s
 

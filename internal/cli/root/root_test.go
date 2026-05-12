@@ -62,6 +62,10 @@ func TestCommandHelpIncludesDefaultOutputSchema(t *testing.T) {
 	if commandHelp["command"] != "create" || commandHelp["schema"] != "create" || commandHelp["fullSchema"] != "create-full" {
 		t.Fatalf("command help schema = %#v, want create schema", commandHelp)
 	}
+	output, _ := commandHelp["output"].(string)
+	if !strings.Contains(output, "human summary") || !strings.Contains(output, "complete structured job metadata") {
+		t.Fatalf("command help output guidance = %q", output)
+	}
 	if !strings.Contains(result.Stdout, "--full") {
 		t.Fatalf("command help missing --full enrichment flag:\n%s", result.Stdout)
 	}
@@ -87,9 +91,13 @@ func TestSchemasDiscoveryOutput(t *testing.T) {
 			t.Fatalf("schema discovery entry = %#v, want object", item)
 		}
 		id, _ := schema["id"].(string)
+		description, _ := schema["description"].(string)
+		if description == "" {
+			t.Fatalf("schema discovery entry missing description: %#v", schema)
+		}
 		seen[id] = true
 	}
-	for _, want := range []string{"help", "command-help", "schemas", "get-full", "list-full", "history-full"} {
+	for _, want := range []string{"help", "command-help", "schemas", "get-full", "list-full", "delete-full", "stop-full", "history-full", "systemd/reconcile-full"} {
 		if !seen[want] {
 			t.Fatalf("schemas discovery missing %q: %#v", want, schemas)
 		}

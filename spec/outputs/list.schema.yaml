@@ -4,17 +4,5 @@ required: [jobs]
 additionalProperties: false
 properties:
   jobs:
-    type: array
-    items:
-      $ref: '#/$defs/jobSummary'
-$defs:
-  jobSummary:
-    type: object
-    required: [id, status, schedule, target]
-    additionalProperties: false
-    properties:
-      id: {type: string, minLength: 1}
-      status: {type: string, minLength: 1}
-      schedule: {type: string, minLength: 1}
-      target: {type: string, minLength: 1}
-      last: {type: string}
+    type: string
+    minLength: 1

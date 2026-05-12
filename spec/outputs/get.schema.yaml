@@ -1,14 +1,8 @@
 $schema: https://json-schema.org/draft/2020-12/schema
-$ref: '#/$defs/jobSummary'
-$defs:
-  jobSummary:
-    type: object
-    required: [id, status, schedule, target, workdir]
-    additionalProperties: false
-    properties:
-      id: {type: string, minLength: 1}
-      status: {type: string, minLength: 1}
-      schedule: {type: string, minLength: 1}
-      target: {type: string, minLength: 1}
-      workdir: {type: string, minLength: 1}
-      last: {type: string}
+type: object
+required: [summary]
+additionalProperties: false
+properties:
+  summary:
+    type: string
+    minLength: 1

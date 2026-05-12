@@ -1,18 +1,8 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 type: object
-required: [scheduleId, serviceName, stopped]
+required: [summary]
 additionalProperties: false
 properties:
-  scheduleId:
+  summary:
     type: string
     minLength: 1
-  serviceName:
-    type: string
-  stopped:
-    type: boolean
-  message:
-    type: string
-  warnings:
-    type: array
-    items:
-      type: string

@@ -17,23 +17,32 @@ func TestHistoryTopLevelListsAllRunsNewestFirst(t *testing.T) {
 	h := clitest.New(t)
 	oldStarted := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
 	newStarted := oldStarted.Add(time.Minute)
+	newFinished := newStarted.Add(2 * time.Second)
+	exitCode := 7
 	writeRunRecords(t, h.RunPath("sched-1"), sched.RunRecord{RunID: "old-run", ScheduleID: "sched-1", Source: sched.RunSourceManual, Status: sched.RunStatusSuccess, StartedAt: oldStarted})
-	writeRunRecords(t, h.RunPath("sched-2"), sched.RunRecord{RunID: "new-run", ScheduleID: "sched-2", Source: sched.RunSourceScheduled, Status: sched.RunStatusFailed, StartedAt: newStarted, LogPath: "/data/opencode/log/new.log", CommandLine: []string{"opencode", "run"}})
+	writeRunRecords(t, h.RunPath("sched-2"), sched.RunRecord{RunID: "new-run", ScheduleID: "sched-2", Source: sched.RunSourceScheduled, Status: sched.RunStatusFailed, StartedAt: newStarted, FinishedAt: &newFinished, DurationMs: 2000, ExitCode: &exitCode, LogPath: "/data/opencode/log/new.log", CommandLine: []string{"opencode", "run"}})
 
 	all := h.Run(t, "history", "--limit", "1").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, all, "history.schema.yaml")
 	allPayload := decodeHistory(t, all.Stdout)
-	if allPayload.ScheduleID != "" || len(allPayload.Runs) != 1 || allPayload.Runs[0].ID != "new-run" {
+	if allPayload.ScheduleID != "" {
 		t.Fatalf("all history payload = %#v", allPayload)
 	}
-	if strings.Contains(all.Stdout, "logPath:") || strings.Contains(all.Stdout, "commandLine:") {
-		t.Fatalf("compact history includes verbose metadata:\n%s", all.Stdout)
+	runLines := strings.Split(allPayload.Runs, "\n")
+	if len(runLines) != 2 {
+		t.Fatalf("all history run table = %#v", runLines)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(all.Stdout), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- ") && !strings.Contains(line, "{") {
-			t.Fatalf("history item is not rendered as flow-style mapping: %q\n%s", line, all.Stdout)
-		}
+	if !strings.Contains(runLines[0], "RUN") || !strings.Contains(runLines[0], "SCHEDULE") || !strings.Contains(runLines[0], "DURATION") || !strings.Contains(runLines[0], "EXIT") {
+		t.Fatalf("history header = %q", runLines[0])
+	}
+	if !strings.Contains(runLines[1], "new-run") || !strings.Contains(runLines[1], "sched-2") || !strings.Contains(runLines[1], "scheduled") || !strings.Contains(runLines[1], "failed") || !strings.Contains(runLines[1], "2000ms") || !strings.Contains(runLines[1], "7") {
+		t.Fatalf("history row = %q", runLines[1])
+	}
+	if strings.Contains(all.Stdout, "logPath:") || strings.Contains(all.Stdout, "commandLine:") {
+		t.Fatalf("human history includes verbose metadata:\n%s", all.Stdout)
+	}
+	if strings.Contains(all.Stdout, "{id:") || strings.Contains(all.Stdout, "- {") {
+		t.Fatalf("history output contains flow-style mapping:\n%s", all.Stdout)
 	}
 
 	full := h.Run(t, "history", "--limit", "1", "--full").RequireSuccess(t)
@@ -56,7 +65,7 @@ func TestHistoryTopLevelFiltersByScheduleID(t *testing.T) {
 	result := h.Run(t, "history", "--schedule-id", "sched-1").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "history.schema.yaml")
 	payload := decodeHistory(t, result.Stdout)
-	if payload.ScheduleID != "sched-1" || len(payload.Runs) != 1 || payload.Runs[0].ID != "sched-1-run" {
+	if payload.ScheduleID != "sched-1" || !strings.Contains(payload.Runs, "sched-1-run") || strings.Contains(payload.Runs, "sched-2-run") {
 		t.Fatalf("filtered history payload = %#v", payload)
 	}
 }
@@ -89,13 +98,7 @@ func writeRunRecords(t *testing.T, path string, records ...sched.RunRecord) {
 	}
 }
 
-func decodeHistory(t *testing.T, raw string) struct {
-	ScheduleID string               `json:"scheduleId"`
-	Runs       []clitest.RunSummary `json:"runs"`
-} {
+func decodeHistory(t *testing.T, raw string) clitest.HistoryResponse {
 	t.Helper()
-	return clitest.DecodeYAMLAs[struct {
-		ScheduleID string               `json:"scheduleId"`
-		Runs       []clitest.RunSummary `json:"runs"`
-	}](t, raw)
+	return clitest.DecodeYAMLAs[clitest.HistoryResponse](t, raw)
 }

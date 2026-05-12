@@ -276,7 +276,7 @@ func runCreateCommand(store *sched.Store, opts options, stdout io.Writer, args [
 	if *full {
 		return writeYAML(stdout, persisted)
 	}
-	return writeYAML(stdout, compactJob(persisted, "created", true))
+	return writeYAML(stdout, jobSummaryResponse(persisted, "created", true))
 }
 
 func createFlagParseError(err error) *sched.CommandError {
@@ -420,7 +420,7 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 		if *full {
 			return writeYAML(stdout, persisted)
 		}
-		return writeYAML(stdout, compactJob(persisted, "upserted", true))
+		return writeYAML(stdout, jobSummaryResponse(persisted, "upserted", true))
 	case "get":
 		full, positional, err := parseFullFlag(args[1:])
 		if err != nil {
@@ -436,7 +436,7 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 		if full {
 			return writeYAML(stdout, job)
 		}
-		return writeYAML(stdout, compactJob(job, "", true))
+		return writeYAML(stdout, jobSummaryResponse(job, "", true))
 	case "list":
 		full, positional, err := parseFullFlag(args[1:])
 		if err != nil {
@@ -452,20 +452,28 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 		if full {
 			return writeYAML(stdout, map[string]any{"jobs": jobs})
 		}
-		return writeYAML(stdout, listResponse{Jobs: compactJobs(jobs)}, withFlowSequenceMaps())
+		return writeYAML(stdout, listJobsResponse(jobs))
 	case "delete":
-		if len(args) != 2 {
-			return errors.New("usage: sched delete <scheduleId>")
+		full, positional, err := parseFullFlag(args[1:])
+		if err != nil {
+			return err
 		}
-		deleted, err := store.DeleteJob(args[1])
+		if len(positional) != 1 {
+			return errors.New("usage: sched delete <scheduleId> [--full]")
+		}
+		scheduleID := positional[0]
+		deleted, err := store.DeleteJob(scheduleID)
 		if err != nil {
 			return err
 		}
 		if _, err := reconcile(store, opts); err != nil {
 			return err
 		}
-		payload := map[string]any{"scheduleId": args[1], "deleted": deleted}
-		return writeYAML(stdout, payload)
+		if full {
+			payload := map[string]any{"scheduleId": scheduleID, "deleted": deleted}
+			return writeYAML(stdout, payload)
+		}
+		return writeYAML(stdout, deleteSummaryResponse(scheduleID, deleted))
 	case "run":
 		if len(args) < 2 {
 			return errors.New("usage: sched run <scheduleId> [--source manual|scheduled]")
@@ -491,12 +499,16 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 		if full {
 			return writeYAML(stdout, record)
 		}
-		return writeYAML(stdout, compactRun(record))
+		return writeYAML(stdout, runSummaryResponse(record))
 	case "stop":
-		if len(args) != 2 {
-			return errors.New("usage: sched stop <scheduleId>")
+		full, positional, err := parseFullFlag(args[1:])
+		if err != nil {
+			return err
 		}
-		result, err := sched.StopSystemdJob(store, args[1], sched.SystemdOptions{
+		if len(positional) != 1 {
+			return errors.New("usage: sched stop <scheduleId> [--full]")
+		}
+		result, err := sched.StopSystemdJob(store, positional[0], sched.SystemdOptions{
 			UnitDir:      opts.systemdDir,
 			StateRoot:    opts.stateRoot,
 			OpenCodeHome: opts.opencodeHome,
@@ -507,7 +519,10 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 		if err != nil {
 			return err
 		}
-		return writeYAML(stdout, result)
+		if full {
+			return writeYAML(stdout, result)
+		}
+		return writeYAML(stdout, stopSummaryResponse(result))
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -535,7 +550,7 @@ func runHistoryCommand(store *sched.Store, opts options, stdout io.Writer, args 
 			payload := map[string]any{"scheduleId": id, "runs": runs}
 			return writeYAML(stdout, payload)
 		}
-		return writeYAML(stdout, historyResponse{ScheduleID: id, Runs: compactRuns(runs)}, withFlowSequenceMaps())
+		return writeYAML(stdout, historyRunsResponse(id, runs))
 	}
 	runs, err := store.ListAllRuns(*limit)
 	if err != nil {
@@ -545,7 +560,7 @@ func runHistoryCommand(store *sched.Store, opts options, stdout io.Writer, args 
 		payload := map[string]any{"runs": runs}
 		return writeYAML(stdout, payload)
 	}
-	return writeYAML(stdout, historyResponse{Runs: compactRuns(runs)}, withFlowSequenceMaps())
+	return writeYAML(stdout, historyRunsResponse("", runs))
 }
 
 func runSystemdCommand(store *sched.Store, opts options, stdout io.Writer, args []string) error {
@@ -566,7 +581,7 @@ func runSystemdCommand(store *sched.Store, opts options, stdout io.Writer, args 
 	if full {
 		return writeYAML(stdout, result)
 	}
-	return writeYAML(stdout, compactReconcile(result), withFlowSequenceMaps())
+	return writeYAML(stdout, reconcileSummaryResponse(result))
 }
 
 func reconcile(store *sched.Store, opts options) (sched.ReconcileResult, error) {
@@ -753,17 +768,17 @@ func rootHelp() map[string]any {
 
 func commandHelps() []map[string]any {
 	return []map[string]any{
-		{"command": "create", "summary": "create a local interval schedule", "usage": createUsageCommand, "flags": []map[string]any{{"name": "--command <name>", "summary": "OpenCode command name"}, {"name": "--agent <name>", "summary": "OpenCode agent name"}, {"name": "--every <duration>", "summary": "Go duration such as 5s, 1m, or 2h"}, {"name": "--workdir <dir>", "summary": "OpenCode working directory"}, {"name": "--schedule-id <id>", "summary": "optional safe schedule identifier"}, {"name": "--full", "summary": "emit complete persisted job metadata"}}, "schema": "create", "fullSchema": "create-full"},
-		{"command": "put", "summary": "upsert a schedule job from JSON stdin", "usage": "sched put --stdin [--full]", "flags": []map[string]any{{"name": "--stdin", "summary": "read job JSON from stdin"}, {"name": "--full", "summary": "emit complete persisted job metadata"}}, "schema": "put", "fullSchema": "put-full"},
-		{"command": "get", "summary": "read one schedule job", "usage": "sched get <scheduleId> [--full]", "flags": []map[string]any{{"name": "--full", "summary": "emit complete persisted job metadata"}}, "schema": "get", "fullSchema": "get-full"},
-		{"command": "list", "summary": "list schedule jobs", "usage": "sched list [--full]", "flags": []map[string]any{{"name": "--full", "summary": "emit complete persisted job metadata"}}, "schema": "list", "fullSchema": "list-full"},
-		{"command": "delete", "summary": "delete one schedule job and reconcile units", "usage": "sched delete <scheduleId>", "schema": "delete"},
-		{"command": "run", "summary": "run one schedule through the scheduler envelope", "usage": "sched run <scheduleId> [--source manual|scheduled] [--full]", "flags": []map[string]any{{"name": "--source manual|scheduled", "summary": "run source"}, {"name": "--full", "summary": "emit complete run metadata"}}, "schema": "run", "fullSchema": "run-full"},
-		{"command": "stop", "summary": "stop active systemd work for a schedule", "usage": "sched stop <scheduleId>", "schema": "stop"},
-		{"command": "history", "summary": "list scheduler envelope run history", "usage": historyUsage + " [--full]", "flags": []map[string]any{{"name": "--schedule-id <scheduleId>", "summary": "filter by schedule"}, {"name": "--limit N", "summary": "maximum records"}, {"name": "--full", "summary": "emit complete run metadata"}}, "schema": "history", "fullSchema": "history-full"},
-		{"command": "export", "summary": "export schedule state", "usage": "sched export", "schema": "export"},
-		{"command": "systemd reconcile", "summary": "render and reconcile user-systemd units", "usage": "sched systemd reconcile [--full]", "flags": []map[string]any{{"name": "--full", "summary": "emit complete reconciliation metadata"}}, "schema": "systemd/reconcile", "fullSchema": "systemd/reconcile-full"},
-		{"command": "schemas", "summary": "list output schemas", "usage": "sched schemas", "schema": "schemas"},
+		{"command": "create", "summary": "create a local interval schedule", "usage": createUsageCommand, "output": "Default output is a human summary scalar; use --full for complete structured job metadata.", "flags": []map[string]any{{"name": "--command <name>", "summary": "OpenCode command name"}, {"name": "--agent <name>", "summary": "OpenCode agent name"}, {"name": "--every <duration>", "summary": "Go duration such as 5s, 1m, or 2h"}, {"name": "--workdir <dir>", "summary": "OpenCode working directory"}, {"name": "--schedule-id <id>", "summary": "optional safe schedule identifier"}, {"name": "--full", "summary": "emit complete structured job metadata"}}, "schema": "create", "fullSchema": "create-full"},
+		{"command": "put", "summary": "upsert a schedule job from JSON stdin", "usage": "sched put --stdin [--full]", "output": "Default output is a human summary scalar; use --full for complete structured job metadata.", "flags": []map[string]any{{"name": "--stdin", "summary": "read job JSON from stdin"}, {"name": "--full", "summary": "emit complete structured job metadata"}}, "schema": "put", "fullSchema": "put-full"},
+		{"command": "get", "summary": "read one schedule job", "usage": "sched get <scheduleId> [--full]", "output": "Default output is a human summary scalar; use --full for complete structured job metadata.", "flags": []map[string]any{{"name": "--full", "summary": "emit complete structured job metadata"}}, "schema": "get", "fullSchema": "get-full"},
+		{"command": "list", "summary": "list schedule jobs", "usage": "sched list [--full]", "output": "Default jobs output is a human-readable YAML scalar table; use --full for structured job records.", "flags": []map[string]any{{"name": "--full", "summary": "emit complete structured job metadata"}}, "schema": "list", "fullSchema": "list-full"},
+		{"command": "delete", "summary": "delete one schedule job and reconcile units", "usage": "sched delete <scheduleId> [--full]", "output": "Default output is a human summary scalar; use --full for the structured deletion result.", "flags": []map[string]any{{"name": "--full", "summary": "emit structured deletion result"}}, "schema": "delete", "fullSchema": "delete-full"},
+		{"command": "run", "summary": "run one schedule through the scheduler envelope", "usage": "sched run <scheduleId> [--source manual|scheduled] [--full]", "output": "Default output is a human summary scalar; use --full for complete structured run metadata.", "flags": []map[string]any{{"name": "--source manual|scheduled", "summary": "run source"}, {"name": "--full", "summary": "emit complete structured run metadata"}}, "schema": "run", "fullSchema": "run-full"},
+		{"command": "stop", "summary": "stop active systemd work for a schedule", "usage": "sched stop <scheduleId> [--full]", "output": "Default output is a human summary scalar; use --full for the structured stop result.", "flags": []map[string]any{{"name": "--full", "summary": "emit structured stop result"}}, "schema": "stop", "fullSchema": "stop-full"},
+		{"command": "history", "summary": "list scheduler envelope run history", "usage": historyUsage + " [--full]", "output": "Default runs output is a human-readable YAML scalar table; use --full for structured run records.", "flags": []map[string]any{{"name": "--schedule-id <scheduleId>", "summary": "filter by schedule"}, {"name": "--limit N", "summary": "maximum records"}, {"name": "--full", "summary": "emit complete structured run metadata"}}, "schema": "history", "fullSchema": "history-full"},
+		{"command": "export", "summary": "export schedule state", "usage": "sched export", "output": "Output is structured YAML for state transfer.", "schema": "export"},
+		{"command": "systemd reconcile", "summary": "render and reconcile user-systemd units", "usage": "sched systemd reconcile [--full]", "output": "Default output is human-readable YAML scalar summaries for unit changes; use --full for structured reconciliation metadata.", "flags": []map[string]any{{"name": "--full", "summary": "emit complete structured reconciliation metadata"}}, "schema": "systemd/reconcile", "fullSchema": "systemd/reconcile-full"},
+		{"command": "schemas", "summary": "list output schemas", "usage": "sched schemas", "output": "Output is structured YAML schema discovery with descriptions.", "schema": "schemas"},
 	}
 }
 
@@ -771,27 +786,29 @@ func schemaDiscovery() map[string]any {
 	return map[string]any{
 		"tool": "sched",
 		"schemas": []map[string]string{
-			{"id": "help", "path": "spec/outputs/help.schema.yaml"},
-			{"id": "command-help", "path": "spec/outputs/command-help.schema.yaml"},
-			{"id": "error", "path": "spec/outputs/error.schema.yaml"},
-			{"id": "create", "path": "spec/outputs/create.schema.yaml"},
-			{"id": "create-full", "path": "spec/outputs/create-full.schema.yaml"},
-			{"id": "put", "path": "spec/outputs/put.schema.yaml"},
-			{"id": "put-full", "path": "spec/outputs/put-full.schema.yaml"},
-			{"id": "get", "path": "spec/outputs/get.schema.yaml"},
-			{"id": "get-full", "path": "spec/outputs/get-full.schema.yaml"},
-			{"id": "list", "path": "spec/outputs/list.schema.yaml"},
-			{"id": "list-full", "path": "spec/outputs/list-full.schema.yaml"},
-			{"id": "delete", "path": "spec/outputs/delete.schema.yaml"},
-			{"id": "run", "path": "spec/outputs/run.schema.yaml"},
-			{"id": "run-full", "path": "spec/outputs/run-full.schema.yaml"},
-			{"id": "stop", "path": "spec/outputs/stop.schema.yaml"},
-			{"id": "history", "path": "spec/outputs/history.schema.yaml"},
-			{"id": "history-full", "path": "spec/outputs/history-full.schema.yaml"},
-			{"id": "export", "path": "spec/outputs/export.schema.yaml"},
-			{"id": "systemd/reconcile", "path": "spec/outputs/systemd/reconcile.schema.yaml"},
-			{"id": "systemd/reconcile-full", "path": "spec/outputs/systemd/reconcile-full.schema.yaml"},
-			{"id": "schemas", "path": "spec/outputs/schemas.schema.yaml"},
+			{"id": "help", "path": "spec/outputs/help.schema.yaml", "description": "root YAML help discovery"},
+			{"id": "command-help", "path": "spec/outputs/command-help.schema.yaml", "description": "command YAML help with default and full output guidance"},
+			{"id": "error", "path": "spec/outputs/error.schema.yaml", "description": "structured YAML error envelope"},
+			{"id": "create", "path": "spec/outputs/create.schema.yaml", "description": "human summary for created schedules"},
+			{"id": "create-full", "path": "spec/outputs/create-full.schema.yaml", "description": "complete structured created job metadata"},
+			{"id": "put", "path": "spec/outputs/put.schema.yaml", "description": "human summary for upserted schedules"},
+			{"id": "put-full", "path": "spec/outputs/put-full.schema.yaml", "description": "complete structured upserted job metadata"},
+			{"id": "get", "path": "spec/outputs/get.schema.yaml", "description": "human summary for one schedule"},
+			{"id": "get-full", "path": "spec/outputs/get-full.schema.yaml", "description": "complete structured job metadata"},
+			{"id": "list", "path": "spec/outputs/list.schema.yaml", "description": "human table of schedules"},
+			{"id": "list-full", "path": "spec/outputs/list-full.schema.yaml", "description": "structured schedule records"},
+			{"id": "delete", "path": "spec/outputs/delete.schema.yaml", "description": "human summary for schedule deletion"},
+			{"id": "delete-full", "path": "spec/outputs/delete-full.schema.yaml", "description": "structured deletion result"},
+			{"id": "run", "path": "spec/outputs/run.schema.yaml", "description": "human summary for a run"},
+			{"id": "run-full", "path": "spec/outputs/run-full.schema.yaml", "description": "complete structured run metadata"},
+			{"id": "stop", "path": "spec/outputs/stop.schema.yaml", "description": "human summary for stopping schedule work"},
+			{"id": "stop-full", "path": "spec/outputs/stop-full.schema.yaml", "description": "structured stop result"},
+			{"id": "history", "path": "spec/outputs/history.schema.yaml", "description": "human table of run history"},
+			{"id": "history-full", "path": "spec/outputs/history-full.schema.yaml", "description": "structured run history records"},
+			{"id": "export", "path": "spec/outputs/export.schema.yaml", "description": "structured schedule state export"},
+			{"id": "systemd/reconcile", "path": "spec/outputs/systemd/reconcile.schema.yaml", "description": "human summary tables for reconciled units"},
+			{"id": "systemd/reconcile-full", "path": "spec/outputs/systemd/reconcile-full.schema.yaml", "description": "structured reconciliation metadata"},
+			{"id": "schemas", "path": "spec/outputs/schemas.schema.yaml", "description": "schema discovery output"},
 		},
 	}
 }

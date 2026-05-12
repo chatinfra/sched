@@ -1,16 +1,10 @@
 $schema: https://json-schema.org/draft/2020-12/schema
 type: object
-required: [dryRun, removed, units, warnings]
+required: [deleted, scheduleId]
 additionalProperties: false
 properties:
-  dryRun:
+  deleted:
     type: boolean
-  removed:
-    type: string
-    minLength: 1
-  warnings:
-    type: string
-    minLength: 1
-  units:
+  scheduleId:
     type: string
     minLength: 1

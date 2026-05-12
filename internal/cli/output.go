@@ -1,121 +1,116 @@
 package cli
 
 import (
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chatinfra/sched/internal/sched"
 )
 
-type jobSummary struct {
-	ID       string `json:"id"`
-	Action   string `json:"action,omitempty"`
-	Status   string `json:"status"`
-	Schedule string `json:"schedule"`
-	Target   string `json:"target"`
-	Workdir  string `json:"workdir,omitempty"`
-	Last     string `json:"last,omitempty"`
+type summaryResponse struct {
+	Summary string `json:"summary"`
 }
 
 type listResponse struct {
-	Jobs []jobSummary `json:"jobs"`
-}
-
-type runSummary struct {
-	ID         string    `json:"id"`
-	ScheduleID string    `json:"scheduleId"`
-	Source     string    `json:"source"`
-	Status     string    `json:"status"`
-	StartedAt  time.Time `json:"startedAt"`
-	DurationMs *int64    `json:"durationMs,omitempty"`
-	ExitCode   *int      `json:"exitCode,omitempty"`
-	Message    string    `json:"message,omitempty"`
+	Jobs string `json:"jobs"`
 }
 
 type historyResponse struct {
-	ScheduleID string       `json:"scheduleId,omitempty"`
-	Runs       []runSummary `json:"runs"`
+	ScheduleID string `json:"scheduleId,omitempty"`
+	Runs       string `json:"runs"`
 }
 
 type reconcileSummary struct {
-	Units    []reconcileUnitSummary `json:"units"`
-	Removed  []string               `json:"removed"`
-	Warnings []string               `json:"warnings,omitempty"`
-	DryRun   bool                   `json:"dryRun"`
+	DryRun   bool   `json:"dryRun"`
+	Units    string `json:"units"`
+	Removed  string `json:"removed"`
+	Warnings string `json:"warnings"`
 }
 
-type reconcileUnitSummary struct {
-	ID       string `json:"id"`
-	Service  string `json:"service"`
-	Timer    string `json:"timer"`
-	Schedule string `json:"schedule"`
-}
-
-func compactJob(job sched.Job, action string, includeWorkdir bool) jobSummary {
-	summary := jobSummary{
-		ID:       job.ScheduleID,
-		Action:   strings.TrimSpace(action),
-		Status:   job.Status,
-		Schedule: scheduleSummary(job),
-		Target:   targetSummary(job),
+func jobSummaryResponse(job sched.Job, action string, includeWorkdir bool) summaryResponse {
+	parts := []string{}
+	if action = cleanSummaryText(action); action != "" {
+		parts = append(parts, action)
 	}
+	parts = append(parts, cleanSummaryText(job.ScheduleID), cleanSummaryText(job.Status), cleanSummaryText(scheduleSummary(job)), cleanSummaryText(targetSummary(job)))
 	if includeWorkdir {
-		summary.Workdir = job.Workdir
+		parts = append(parts, "workdir="+cleanSummaryText(job.Workdir))
 	}
 	if last := lastRunSummary(job); last != "" {
-		summary.Last = last
+		parts = append(parts, "last="+cleanSummaryText(last))
 	}
-	return summary
+	return summaryResponse{Summary: strings.Join(nonEmpty(parts), " ")}
 }
 
-func compactJobs(jobs []sched.Job) []jobSummary {
-	summaries := make([]jobSummary, 0, len(jobs))
+func listJobsResponse(jobs []sched.Job) listResponse {
+	rows := make([][]string, 0, len(jobs))
 	for _, job := range jobs {
-		summaries = append(summaries, compactJob(job, "", false))
+		last := lastRunSummary(job)
+		if last == "" {
+			last = "-"
+		}
+		rows = append(rows, []string{job.ScheduleID, job.Status, scheduleSummary(job), targetSummary(job), last})
 	}
-	return summaries
+	return listResponse{Jobs: renderTable([]string{"ID", "STATUS", "SCHEDULE", "TARGET", "LAST"}, rows, "none")}
 }
 
-func compactRun(record sched.RunRecord) runSummary {
-	summary := runSummary{
-		ID:         record.RunID,
-		ScheduleID: record.ScheduleID,
-		Source:     record.Source,
-		Status:     record.Status,
-		StartedAt:  record.StartedAt,
-		ExitCode:   record.ExitCode,
-		Message:    record.Message,
+func deleteSummaryResponse(scheduleID string, deleted bool) summaryResponse {
+	id := cleanSummaryText(scheduleID)
+	if deleted {
+		return summaryResponse{Summary: "deleted " + id}
 	}
-	if record.DurationMs > 0 {
-		duration := record.DurationMs
-		summary.DurationMs = &duration
-	}
-	return summary
+	return summaryResponse{Summary: "not found " + id + "; no schedule removed"}
 }
 
-func compactRuns(records []sched.RunRecord) []runSummary {
-	summaries := make([]runSummary, 0, len(records))
+func runSummaryResponse(record sched.RunRecord) summaryResponse {
+	parts := []string{"run", record.RunID, record.ScheduleID, record.Source, record.Status}
+	if duration := runDurationSummary(record); duration != "" {
+		parts = append(parts, "duration="+duration)
+	}
+	if record.ExitCode != nil {
+		parts = append(parts, "exit="+strconv.Itoa(*record.ExitCode))
+	}
+	if message := cleanSummaryText(record.Message); message != "" {
+		parts = append(parts, "message="+message)
+	}
+	return summaryResponse{Summary: strings.Join(nonEmptyClean(parts), " ")}
+}
+
+func stopSummaryResponse(result sched.StopResult) summaryResponse {
+	id := cleanSummaryText(result.ScheduleID)
+	message := cleanSummaryText(result.Message)
+	summary := "not stopped " + id
+	if result.Stopped {
+		summary = "stopped " + id
+	} else if message != "" {
+		summary += ": " + message
+	}
+	if warnings := cleanJoined(result.Warnings); warnings != "" {
+		summary += " warnings=" + warnings
+	}
+	return summaryResponse{Summary: summary}
+}
+
+func historyRunsResponse(scheduleID string, records []sched.RunRecord) historyResponse {
+	rows := make([][]string, 0, len(records))
 	for _, record := range records {
-		summaries = append(summaries, compactRun(record))
+		rows = append(rows, []string{record.RunID, record.ScheduleID, record.Source, record.Status, runDurationCell(record), exitCodeCell(record.ExitCode)})
 	}
-	return summaries
+	return historyResponse{ScheduleID: strings.TrimSpace(scheduleID), Runs: renderTable([]string{"RUN", "SCHEDULE", "SOURCE", "STATUS", "DURATION", "EXIT"}, rows, "none")}
 }
 
-func compactReconcile(result sched.ReconcileResult) reconcileSummary {
-	units := make([]reconcileUnitSummary, 0, len(result.Units))
+func reconcileSummaryResponse(result sched.ReconcileResult) reconcileSummary {
+	unitRows := make([][]string, 0, len(result.Units))
 	for _, unit := range result.Units {
-		units = append(units, reconcileUnitSummary{
-			ID:       unit.ScheduleID,
-			Service:  unit.ServiceName,
-			Timer:    unit.TimerName,
-			Schedule: unitScheduleSummary(unit),
-		})
+		unitRows = append(unitRows, []string{unit.ScheduleID, unit.TimerName, unit.ServiceName, unitScheduleSummary(unit)})
 	}
 	return reconcileSummary{
-		Units:    units,
-		Removed:  result.Removed,
-		Warnings: result.Warnings,
 		DryRun:   result.DryRun,
+		Units:    renderTable([]string{"ID", "TIMER", "SERVICE", "SCHEDULE"}, unitRows, "none"),
+		Removed:  renderOneColumnTable("UNIT", result.Removed, "none"),
+		Warnings: renderOneColumnTable("WARNING", result.Warnings, "none"),
 	}
 }
 
@@ -174,4 +169,127 @@ func lastRunSummary(job sched.Job) string {
 		return status
 	}
 	return status + " " + job.LastRunAt.UTC().Format(time.RFC3339Nano)
+}
+
+func renderOneColumnTable(header string, values []string, empty string) string {
+	rows := make([][]string, 0, len(values))
+	for _, value := range values {
+		rows = append(rows, []string{value})
+	}
+	return renderTable([]string{header}, rows, empty)
+}
+
+func renderTable(headers []string, rows [][]string, empty string) string {
+	if len(rows) == 0 {
+		return cleanSummaryText(empty)
+	}
+	widths := make([]int, len(headers))
+	for i, header := range headers {
+		widths[i] = cellWidth(header)
+	}
+	for _, row := range rows {
+		for i := range headers {
+			width := cellWidth(cellAt(row, i))
+			if width > widths[i] {
+				widths[i] = width
+			}
+		}
+	}
+	var b strings.Builder
+	appendTableRow(&b, headers, widths)
+	for _, row := range rows {
+		b.WriteByte('\n')
+		appendTableRow(&b, row, widths)
+	}
+	return b.String()
+}
+
+func appendTableRow(b *strings.Builder, row []string, widths []int) {
+	for i := range widths {
+		if i > 0 {
+			b.WriteString("  ")
+		}
+		cell := cleanCell(cellAt(row, i))
+		b.WriteString(cell)
+		for pad := widths[i] - cellWidth(cell); pad > 0; pad-- {
+			b.WriteByte(' ')
+		}
+	}
+}
+
+func cellAt(row []string, index int) string {
+	if index < len(row) {
+		return row[index]
+	}
+	return ""
+}
+
+func cleanCell(value string) string {
+	value = cleanSummaryText(value)
+	if value == "" {
+		return "-"
+	}
+	return value
+}
+
+func cleanSummaryText(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+func cleanJoined(values []string) string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = cleanSummaryText(value); value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	return strings.Join(cleaned, "; ")
+}
+
+func nonEmpty(values []string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
+}
+
+func nonEmptyClean(values []string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = cleanSummaryText(value); value != "" {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
+}
+
+func runDurationSummary(record sched.RunRecord) string {
+	if record.FinishedAt == nil && record.DurationMs <= 0 {
+		return ""
+	}
+	if record.DurationMs < 0 {
+		return ""
+	}
+	return strconv.FormatInt(record.DurationMs, 10) + "ms"
+}
+
+func runDurationCell(record sched.RunRecord) string {
+	if duration := runDurationSummary(record); duration != "" {
+		return duration
+	}
+	return "-"
+}
+
+func exitCodeCell(exitCode *int) string {
+	if exitCode == nil {
+		return "-"
+	}
+	return strconv.Itoa(*exitCode)
+}
+
+func cellWidth(value string) int {
+	return utf8.RuneCountInString(cleanCell(value))
 }

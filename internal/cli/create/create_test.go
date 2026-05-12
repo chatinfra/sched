@@ -17,19 +17,21 @@ func TestCreateIntervalCommandYAMLPersistsAndReconciles(t *testing.T) {
 		t.Fatalf("MkdirAll(workdir) error = %v", err)
 	}
 
-	result := h.Run(t, "create", "--command", "hello", "--agent", "syslog", "--every", "5s", "--workdir", workdir).RequireSuccess(t)
+	result := h.Run(t, "create", "--command", "hello", "--agent", "syslog", "--every", "5s", "--workdir", workdir, "--schedule-id", "sched-create").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "create.schema.yaml")
-	summary := clitest.DecodeYAMLAs[clitest.JobSummary](t, result.Stdout)
-	if summary.ID == "" || summary.Action != "created" || summary.Status != sched.StatusActive || summary.Schedule != "every 5s" || summary.Target != "hello @ syslog" || summary.Workdir != workdir {
-		t.Fatalf("compact create summary = %#v", summary)
+	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, result.Stdout)
+	for _, want := range []string{"created", "sched-create", sched.StatusActive, "every 5s", "hello @ syslog", "workdir=" + workdir} {
+		if !strings.Contains(summary.Summary, want) {
+			t.Fatalf("create summary %q missing %q", summary.Summary, want)
+		}
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
 		if strings.Contains(result.Stdout, omitted+":") {
-			t.Fatalf("compact create output includes verbose field %q:\n%s", omitted, result.Stdout)
+			t.Fatalf("human create output includes verbose field %q:\n%s", omitted, result.Stdout)
 		}
 	}
 
-	fullResult := h.Run(t, "get", summary.ID, "--full").RequireSuccess(t)
+	fullResult := h.Run(t, "get", "sched-create", "--full").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, fullResult, "get-full.schema.yaml")
 	job := clitest.DecodeYAMLAs[sched.Job](t, fullResult.Stdout)
 
@@ -66,11 +68,29 @@ func TestCreateIntervalCommandYAMLPersistsAndReconciles(t *testing.T) {
 			t.Fatalf("service missing %q:\n%s", want, service)
 		}
 	}
+	if !strings.Contains(service, "EnvironmentFile=-"+workdir+"/.env") {
+		t.Fatalf("service should load the OpenCode workdir env file:\n%s", service)
+	}
 	if strings.Contains(service, "--json") {
 		t.Fatalf("service should not request JSON output:\n%s", service)
 	}
 	if strings.Contains(service, "opencode run") {
 		t.Fatalf("service should run through sched envelope, not opencode directly:\n%s", service)
+	}
+}
+
+func TestCreateFullYAMLOutput(t *testing.T) {
+	h := clitest.New(t)
+	workdir := filepath.Join(h.Root, "work")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(workdir) error = %v", err)
+	}
+
+	result := h.Run(t, "create", "--command", "hello", "--agent", "syslog", "--every", "5s", "--workdir", workdir, "--schedule-id", "sched-create-full", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, result, "create-full.schema.yaml")
+	job := clitest.DecodeYAMLAs[sched.Job](t, result.Stdout)
+	if job.ScheduleID != "sched-create-full" || job.CommandName != "hello" || job.AgentName != "syslog" || job.Title == "" {
+		t.Fatalf("create full job = %#v", job)
 	}
 }
 

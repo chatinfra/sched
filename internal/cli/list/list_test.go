@@ -1,7 +1,6 @@
 package list
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
@@ -15,8 +14,8 @@ func TestListEmptyStateYAML(t *testing.T) {
 	result := h.Run(t, "list").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "list.schema.yaml")
 	payload := decodeList(t, result.Stdout)
-	if len(payload.Jobs) != 0 {
-		t.Fatalf("empty YAML jobs = %#v", payload.Jobs)
+	if payload.Jobs != "none" {
+		t.Fatalf("empty YAML jobs = %q", payload.Jobs)
 	}
 }
 
@@ -38,26 +37,26 @@ func TestListPopulatedStateShapeAndStableOutput(t *testing.T) {
 		t.Fatalf("list YAML output changed between calls:\nfirst=%s\nsecond=%s", first.Stdout, second.Stdout)
 	}
 	payload := decodeList(t, first.Stdout)
-	ids := make([]string, 0, len(payload.Jobs))
-	for _, job := range payload.Jobs {
-		ids = append(ids, job.ID)
-		if job.Status == "" || job.Schedule == "" || job.Target == "" {
-			t.Fatalf("compact list job missing summary fields: %#v", job)
-		}
+	lines := strings.Split(payload.Jobs, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("list jobs table lines = %#v", lines)
 	}
-	if !reflect.DeepEqual(ids, []string{"sched-1", "sched-2"}) {
-		t.Fatalf("list IDs = %#v", ids)
+	if !strings.Contains(lines[0], "ID") || !strings.Contains(lines[0], "STATUS") || !strings.Contains(lines[0], "SCHEDULE") || !strings.Contains(lines[0], "TARGET") {
+		t.Fatalf("list jobs header = %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "sched-1") || !strings.Contains(lines[1], "active") || !strings.Contains(lines[1], "cron 0 9 * * * UTC") || !strings.Contains(lines[1], "Daily-Backup @ build-agent") {
+		t.Fatalf("first list row = %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "sched-2") || !strings.Contains(lines[2], "Nightly-Report @ build-agent") {
+		t.Fatalf("second list row = %q", lines[2])
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
 		if strings.Contains(first.Stdout, omitted+":") {
-			t.Fatalf("compact list output includes verbose field %q:\n%s", omitted, first.Stdout)
+			t.Fatalf("human list output includes verbose field %q:\n%s", omitted, first.Stdout)
 		}
 	}
-	for _, line := range strings.Split(strings.TrimSpace(first.Stdout), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- ") && !strings.Contains(line, "{") {
-			t.Fatalf("list item is not rendered as flow-style mapping: %q\n%s", line, first.Stdout)
-		}
+	if strings.Contains(first.Stdout, "{id:") || strings.Contains(first.Stdout, "- {") {
+		t.Fatalf("list output contains flow-style mapping:\n%s", first.Stdout)
 	}
 
 	full := h.Run(t, "list", "--full").RequireSuccess(t)
@@ -70,11 +69,7 @@ func TestListPopulatedStateShapeAndStableOutput(t *testing.T) {
 	}
 }
 
-func decodeList(t *testing.T, raw string) struct {
-	Jobs []clitest.JobSummary `json:"jobs"`
-} {
+func decodeList(t *testing.T, raw string) clitest.ListResponse {
 	t.Helper()
-	return clitest.DecodeYAMLAs[struct {
-		Jobs []clitest.JobSummary `json:"jobs"`
-	}](t, raw)
+	return clitest.DecodeYAMLAs[clitest.ListResponse](t, raw)
 }

@@ -28,11 +28,14 @@ func TestReconcileActivePausedStaleAndYAMLOutput(t *testing.T) {
 	result := h.Run(t, "systemd", "reconcile").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
 	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
-	if reconciled.DryRun || len(reconciled.Units) != 1 || reconciled.Units[0].ID != "sched-active" {
+	if reconciled.DryRun || !strings.Contains(reconciled.Units, "sched-active") || strings.Contains(reconciled.Units, "sched-paused") {
 		t.Fatalf("reconcile units = %#v", reconciled)
 	}
-	if !contains(reconciled.Removed, "sched-command-stale.timer") {
+	if !strings.Contains(reconciled.Removed, "sched-command-stale.timer") {
 		t.Fatalf("removed units = %#v", reconciled.Removed)
+	}
+	if strings.Contains(result.Stdout, "{id:") || strings.Contains(result.Stdout, "- {") {
+		t.Fatalf("reconcile output contains flow-style mapping:\n%s", result.Stdout)
 	}
 	full := h.Run(t, "systemd", "reconcile", "--full").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, full, "systemd/reconcile-full.schema.yaml")
@@ -66,13 +69,13 @@ func TestReconcileSuppressesActiveJobWithoutChangingStoredStatus(t *testing.T) {
 	result := h.Run(t, "systemd", "reconcile").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
 	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
-	if len(reconciled.Units) != 1 || reconciled.Units[0].ID != "sched-active" {
+	if !strings.Contains(reconciled.Units, "sched-active") || strings.Contains(reconciled.Units, "sched-suppressed") {
 		t.Fatalf("reconcile units = %#v", reconciled.Units)
 	}
-	if !contains(reconciled.Removed, filepath.Base(staleService)) || !contains(reconciled.Removed, filepath.Base(staleTimer)) {
+	if !strings.Contains(reconciled.Removed, filepath.Base(staleService)) || !strings.Contains(reconciled.Removed, filepath.Base(staleTimer)) {
 		t.Fatalf("removed units = %#v", reconciled.Removed)
 	}
-	if !containsSubstring(reconciled.Warnings, "suppressed sched-suppressed") {
+	if !strings.Contains(reconciled.Warnings, "suppressed sched-suppressed") {
 		t.Fatalf("warnings = %#v", reconciled.Warnings)
 	}
 
@@ -95,14 +98,11 @@ func TestReconcileDryRunSummaryPreservesStaleUnits(t *testing.T) {
 	result := h.Run(t, "--dry-run", "systemd", "reconcile").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
 	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
-	if !reconciled.DryRun || len(reconciled.Units) != 1 || len(reconciled.Removed) != 1 {
+	if !reconciled.DryRun || !strings.Contains(reconciled.Units, "sched-1") || !strings.Contains(reconciled.Removed, "sched-command-stale.service") {
 		t.Fatalf("dry-run YAML output = %#v", reconciled)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- ") && strings.Contains(line, "id:") && !strings.Contains(line, "{") {
-			t.Fatalf("reconcile unit is not rendered as flow-style mapping: %q\n%s", line, result.Stdout)
-		}
+	if strings.Contains(result.Stdout, "{id:") || strings.Contains(result.Stdout, "- {") {
+		t.Fatalf("reconcile output contains flow-style mapping:\n%s", result.Stdout)
 	}
 	if _, err := os.Stat(stalePath); err != nil {
 		t.Fatalf("dry-run removed stale unit: %v", err)
@@ -116,11 +116,17 @@ func TestReconcileUsesConfiguredStableSchedLauncherPath(t *testing.T) {
 	result := h.Run(t, "--sched-bin", "/data/opencode/bin/sched", "systemd", "reconcile").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
 	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
-	if len(reconciled.Units) != 1 {
+	if !strings.Contains(reconciled.Units, "sched-stable-launcher") {
 		t.Fatalf("reconcile units = %#v", reconciled.Units)
 	}
+	full := h.Run(t, "--sched-bin", "/data/opencode/bin/sched", "systemd", "reconcile", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, full, "systemd/reconcile-full.schema.yaml")
+	fullReconciled := clitest.DecodeYAMLAs[sched.ReconcileResult](t, full.Stdout)
+	if len(fullReconciled.Units) != 1 {
+		t.Fatalf("full reconcile units = %#v", fullReconciled.Units)
+	}
 
-	servicePath := filepath.Join(h.SystemdDir, reconciled.Units[0].Service)
+	servicePath := filepath.Join(h.SystemdDir, fullReconciled.Units[0].ServiceName)
 	serviceContent, err := os.ReadFile(servicePath)
 	if err != nil {
 		t.Fatalf("ReadFile(%s) error = %v", servicePath, err)
@@ -146,22 +152,4 @@ func TestReconcileUsageErrors(t *testing.T) {
 	if envelope.Error.Code != "internal_error" || !strings.Contains(envelope.Error.Message, "usage: sched systemd reconcile") {
 		t.Fatalf("usage envelope = %#v", envelope.Error)
 	}
-}
-
-func contains(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
-
-func containsSubstring(values []string, want string) bool {
-	for _, value := range values {
-		if strings.Contains(value, want) {
-			return true
-		}
-	}
-	return false
 }

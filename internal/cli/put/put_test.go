@@ -14,13 +14,15 @@ func TestPutValidStdinPersistsJob(t *testing.T) {
 
 	result := h.RunWithStdin(t, clitest.SampleJobJSON(t), "put", "--stdin").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "put.schema.yaml")
-	summary := clitest.DecodeYAMLAs[clitest.JobSummary](t, result.Stdout)
-	if summary.ID != "sched-1" || summary.Action != "upserted" || summary.Status != sched.StatusActive || summary.Target != "Daily-Backup @ build-agent" || summary.Workdir == "" {
-		t.Fatalf("put summary = %#v", summary)
+	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, result.Stdout)
+	for _, want := range []string{"upserted", "sched-1", sched.StatusActive, "Daily-Backup @ build-agent", "workdir=/data/opencode/work"} {
+		if !strings.Contains(summary.Summary, want) {
+			t.Fatalf("put summary %q missing %q", summary.Summary, want)
+		}
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
 		if strings.Contains(result.Stdout, omitted+":") {
-			t.Fatalf("compact put output includes verbose field %q:\n%s", omitted, result.Stdout)
+			t.Fatalf("human put output includes verbose field %q:\n%s", omitted, result.Stdout)
 		}
 	}
 	if result.Stderr != "" {
@@ -71,13 +73,8 @@ func TestPutIdempotentUpdatePreservesCreatedAt(t *testing.T) {
 
 	listResult := h.Run(t, "list").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, listResult, "list.schema.yaml")
-	var payload struct {
-		Jobs []clitest.JobSummary `json:"jobs"`
-	}
-	payload = clitest.DecodeYAMLAs[struct {
-		Jobs []clitest.JobSummary `json:"jobs"`
-	}](t, listResult.Stdout)
-	if len(payload.Jobs) != 1 || !strings.Contains(payload.Jobs[0].Target, "Deploy-Production") {
+	payload := clitest.DecodeYAMLAs[clitest.ListResponse](t, listResult.Stdout)
+	if !strings.Contains(payload.Jobs, "Deploy-Production @ build-agent") {
 		t.Fatalf("list after update = %#v", payload.Jobs)
 	}
 }

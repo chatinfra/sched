@@ -14,13 +14,15 @@ func TestGetFoundJobYAMLOutput(t *testing.T) {
 
 	result := h.Run(t, "get", "sched-1").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, result, "get.schema.yaml")
-	summary := clitest.DecodeYAMLAs[clitest.JobSummary](t, result.Stdout)
-	if summary.ID != "sched-1" || summary.Target != "Daily-Backup @ build-agent" || summary.Schedule != "cron 0 9 * * * UTC" || summary.Workdir == "" {
-		t.Fatalf("get YAML summary = %#v", summary)
+	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, result.Stdout)
+	for _, want := range []string{"sched-1", "Daily-Backup @ build-agent", "cron 0 9 * * * UTC", "workdir=/data/opencode/work"} {
+		if !strings.Contains(summary.Summary, want) {
+			t.Fatalf("get summary %q missing %q", summary.Summary, want)
+		}
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
 		if strings.Contains(result.Stdout, omitted+":") {
-			t.Fatalf("compact get output includes verbose field %q:\n%s", omitted, result.Stdout)
+			t.Fatalf("human get output includes verbose field %q:\n%s", omitted, result.Stdout)
 		}
 	}
 
