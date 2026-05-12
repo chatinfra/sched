@@ -52,3 +52,4 @@ Installer and reconfigure flows preserve dirty `/data/opencode/src/sched` checko
 4. Open a pull request against the public mirror.
 
 Accepted public changes are reviewed and imported into canonical `go/sched` in the ChatInfra monorepo before the public mirror is synchronized again. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+
