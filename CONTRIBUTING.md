@@ -65,4 +65,4 @@ Prefer the helper for normal imports; it validates patch shape before applying. 
 bin/sync_sched
 ```
 
-The sync treats `./go/sched` as canonical source when run from the monorepo root, clones or reuses the public mirror checkout under `$SUPER_TMP_DIR/sched-public-mirror-checkout` or `./tmp/sched-public-mirror-checkout`, refuses dirty canonical or mirror state, requires mirror `HEAD` to match its fetched upstream exactly, copies only the scheduler subtree into the public mirror checkout, commits generated changes, and pushes the mirror branch.
+The sync treats `./go/sched` as canonical source when run from the monorepo root, clones or reuses the public mirror checkout under `$SUPER_TMP_DIR/sched-public-mirror-checkout` or `./tmp/sched-public-mirror-checkout` via the SSH remote `git@github.com:chatinfra/sched.git`, refuses dirty canonical or mirror state, requires mirror `HEAD` to match its fetched upstream exactly, copies only the scheduler subtree into the public mirror checkout, commits generated changes, and pushes the mirror branch.
