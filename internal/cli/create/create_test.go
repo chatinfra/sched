@@ -10,7 +10,7 @@ import (
 	"github.com/chatinfra/sched/internal/sched"
 )
 
-func TestCreateIntervalCommandYAMLPersistsAndReconciles(t *testing.T) {
+func TestCreateIntervalCommandTerminalOutputPersistsAndReconciles(t *testing.T) {
 	h := clitest.New(t)
 	workdir := filepath.Join(h.Root, "work")
 	if err := os.MkdirAll(workdir, 0o755); err != nil {
@@ -18,17 +18,19 @@ func TestCreateIntervalCommandYAMLPersistsAndReconciles(t *testing.T) {
 	}
 
 	result := h.Run(t, "create", "--command", "hello", "--agent", "syslog", "--every", "5s", "--workdir", workdir, "--schedule-id", "sched-create").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "create.schema.yaml")
-	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, result.Stdout)
-	for _, want := range []string{"created", "sched-create", sched.StatusActive, "every 5s", "hello @ syslog", "workdir=" + workdir} {
-		if !strings.Contains(summary.Summary, want) {
-			t.Fatalf("create summary %q missing %q", summary.Summary, want)
+	stdout := clitest.RequireTextStdout(t, result)
+	for _, want := range []string{"Created schedule sched-create", "Status:", "active", "Schedule: every 5s", "Command:  hello", "Agent:    syslog", "Workdir:  " + workdir} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("create terminal output missing %q:\n%s", want, stdout)
 		}
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
-		if strings.Contains(result.Stdout, omitted+":") {
-			t.Fatalf("human create output includes verbose field %q:\n%s", omitted, result.Stdout)
+		if strings.Contains(stdout, omitted+":") {
+			t.Fatalf("terminal create output includes verbose field %q:\n%s", omitted, stdout)
 		}
+	}
+	if strings.Contains(stdout, "summary:") {
+		t.Fatalf("terminal create output contains YAML summary wrapper:\n%s", stdout)
 	}
 
 	fullResult := h.Run(t, "get", "sched-create", "--full").RequireSuccess(t)

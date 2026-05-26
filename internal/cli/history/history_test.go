@@ -23,12 +23,8 @@ func TestHistoryTopLevelListsAllRunsNewestFirst(t *testing.T) {
 	writeRunRecords(t, h.RunPath("sched-2"), sched.RunRecord{RunID: "new-run", ScheduleID: "sched-2", Source: sched.RunSourceScheduled, Status: sched.RunStatusFailed, StartedAt: newStarted, FinishedAt: &newFinished, DurationMs: 2000, ExitCode: &exitCode, LogPath: "/data/opencode/log/new.log", CommandLine: []string{"opencode", "run"}})
 
 	all := h.Run(t, "history", "--limit", "1").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, all, "history.schema.yaml")
-	allPayload := decodeHistory(t, all.Stdout)
-	if allPayload.ScheduleID != "" {
-		t.Fatalf("all history payload = %#v", allPayload)
-	}
-	runLines := strings.Split(allPayload.Runs, "\n")
+	allText := clitest.RequireTextStdout(t, all)
+	runLines := strings.Split(strings.TrimSuffix(allText, "\n"), "\n")
 	if len(runLines) != 2 {
 		t.Fatalf("all history run table = %#v", runLines)
 	}
@@ -38,11 +34,11 @@ func TestHistoryTopLevelListsAllRunsNewestFirst(t *testing.T) {
 	if !strings.Contains(runLines[1], "new-run") || !strings.Contains(runLines[1], "sched-2") || !strings.Contains(runLines[1], "scheduled") || !strings.Contains(runLines[1], "failed") || !strings.Contains(runLines[1], "2000ms") || !strings.Contains(runLines[1], "7") {
 		t.Fatalf("history row = %q", runLines[1])
 	}
-	if strings.Contains(all.Stdout, "logPath:") || strings.Contains(all.Stdout, "commandLine:") {
-		t.Fatalf("human history includes verbose metadata:\n%s", all.Stdout)
+	if strings.Contains(allText, "logPath:") || strings.Contains(allText, "commandLine:") {
+		t.Fatalf("terminal history includes verbose metadata:\n%s", allText)
 	}
-	if strings.Contains(all.Stdout, "{id:") || strings.Contains(all.Stdout, "- {") {
-		t.Fatalf("history output contains flow-style mapping:\n%s", all.Stdout)
+	if strings.Contains(allText, "runs:") || strings.Contains(allText, "|-") || strings.Contains(allText, "{id:") || strings.Contains(allText, "- {") {
+		t.Fatalf("history output contains YAML wrapper or flow-style mapping:\n%s", allText)
 	}
 
 	full := h.Run(t, "history", "--limit", "1", "--full").RequireSuccess(t)
@@ -63,10 +59,23 @@ func TestHistoryTopLevelFiltersByScheduleID(t *testing.T) {
 	writeRunRecords(t, h.RunPath("sched-2"), sched.RunRecord{RunID: "sched-2-run", ScheduleID: "sched-2", Source: sched.RunSourceScheduled, Status: sched.RunStatusFailed, StartedAt: started.Add(time.Minute)})
 
 	result := h.Run(t, "history", "--schedule-id", "sched-1").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "history.schema.yaml")
-	payload := decodeHistory(t, result.Stdout)
-	if payload.ScheduleID != "sched-1" || !strings.Contains(payload.Runs, "sched-1-run") || strings.Contains(payload.Runs, "sched-2-run") {
-		t.Fatalf("filtered history payload = %#v", payload)
+	stdout := clitest.RequireTextStdout(t, result)
+	if !strings.Contains(stdout, "sched-1-run") || strings.Contains(stdout, "sched-2-run") {
+		t.Fatalf("filtered history terminal output = %s", stdout)
+	}
+}
+
+func TestHistoryEmptyStateTerminalText(t *testing.T) {
+	h := clitest.New(t)
+
+	all := h.Run(t, "history").RequireSuccess(t)
+	if stdout := clitest.RequireTextStdout(t, all); strings.TrimSpace(stdout) != "No run history found." {
+		t.Fatalf("empty all-history terminal output = %q", stdout)
+	}
+
+	filtered := h.Run(t, "history", "--schedule-id", "sched-1").RequireSuccess(t)
+	if stdout := clitest.RequireTextStdout(t, filtered); strings.TrimSpace(stdout) != "No run history found for schedule sched-1." {
+		t.Fatalf("empty filtered history terminal output = %q", stdout)
 	}
 }
 
@@ -96,9 +105,4 @@ func writeRunRecords(t *testing.T, path string, records ...sched.RunRecord) {
 	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
-}
-
-func decodeHistory(t *testing.T, raw string) clitest.HistoryResponse {
-	t.Helper()
-	return clitest.DecodeYAMLAs[clitest.HistoryResponse](t, raw)
 }

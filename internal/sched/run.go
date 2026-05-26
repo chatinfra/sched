@@ -84,7 +84,7 @@ func RunJob(store *Store, scheduleID string, opts RunOptions) (RunRecord, error)
 	cmd := exec.Command(opts.OpenCodeBin, "run", "--dir", job.Workdir, "--command", job.CommandName, "--agent", job.AgentName, "--title", job.Title)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = runEnvironment(opts.OpenCodeHome)
+	cmd.Env = runEnvironment(opts.OpenCodeHome, job.NotifyChannel, job.NotifyTo)
 	runErr := cmd.Run()
 	finishedAt := opts.Now().UTC()
 	record.FinishedAt = &finishedAt
@@ -199,7 +199,7 @@ func processAlive(pid int) bool {
 	return true
 }
 
-func runEnvironment(opencodeHome string) []string {
+func runEnvironment(opencodeHome string, notifyChannel *string, notifyTo *string) []string {
 	envMap := map[string]string{}
 	for _, entry := range os.Environ() {
 		key, value, ok := strings.Cut(entry, "=")
@@ -210,6 +210,10 @@ func runEnvironment(opencodeHome string) []string {
 	}
 	if opencodeHome != "" {
 		envMap["OPENCODE_LOG_DIR"] = filepath.Join(opencodeHome, "log")
+	}
+	if notifyChannel != nil && notifyTo != nil {
+		envMap["SCHED_NOTIFY_CHANNEL"] = *notifyChannel
+		envMap["SCHED_NOTIFY_TO"] = *notifyTo
 	}
 	envMap["OPENCODE_PERMISSION"] = mergeQuestionDeny(envMap["OPENCODE_PERMISSION"])
 	keys := make([]string, 0, len(envMap))

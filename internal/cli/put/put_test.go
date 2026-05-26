@@ -13,17 +13,19 @@ func TestPutValidStdinPersistsJob(t *testing.T) {
 	h := clitest.New(t)
 
 	result := h.RunWithStdin(t, clitest.SampleJobJSON(t), "put", "--stdin").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "put.schema.yaml")
-	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, result.Stdout)
-	for _, want := range []string{"upserted", "sched-1", sched.StatusActive, "Daily-Backup @ build-agent", "workdir=/data/opencode/work"} {
-		if !strings.Contains(summary.Summary, want) {
-			t.Fatalf("put summary %q missing %q", summary.Summary, want)
+	stdout := clitest.RequireTextStdout(t, result)
+	for _, want := range []string{"Upserted schedule sched-1", "Status:", "active", "Schedule: cron 0 9 * * * UTC", "Command:  Daily-Backup", "Agent:    build-agent", "Workdir:  /data/opencode/work"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("put terminal output missing %q:\n%s", want, stdout)
 		}
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
-		if strings.Contains(result.Stdout, omitted+":") {
-			t.Fatalf("human put output includes verbose field %q:\n%s", omitted, result.Stdout)
+		if strings.Contains(stdout, omitted+":") {
+			t.Fatalf("terminal put output includes verbose field %q:\n%s", omitted, stdout)
 		}
+	}
+	if strings.Contains(stdout, "summary:") {
+		t.Fatalf("terminal put output contains YAML summary wrapper:\n%s", stdout)
 	}
 	if result.Stderr != "" {
 		t.Fatalf("put stderr = %q", result.Stderr)
@@ -72,10 +74,9 @@ func TestPutIdempotentUpdatePreservesCreatedAt(t *testing.T) {
 	}
 
 	listResult := h.Run(t, "list").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, listResult, "list.schema.yaml")
-	payload := clitest.DecodeYAMLAs[clitest.ListResponse](t, listResult.Stdout)
-	if !strings.Contains(payload.Jobs, "Deploy-Production @ build-agent") {
-		t.Fatalf("list after update = %#v", payload.Jobs)
+	stdout := clitest.RequireTextStdout(t, listResult)
+	if !strings.Contains(stdout, "Deploy-Production @ build-agent") {
+		t.Fatalf("list after update = %s", stdout)
 	}
 }
 

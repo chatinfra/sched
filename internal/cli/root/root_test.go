@@ -10,30 +10,27 @@ import (
 	"github.com/chatinfra/sched/internal/sched"
 )
 
-func TestHelpMissingAndUnknownCommands(t *testing.T) {
+func TestRootHelpRendersTerminalTextByDefault(t *testing.T) {
 	h := clitest.New(t)
 
-	help := h.RunRaw(t, "--help").RequireSuccess(t)
-	helpDoc := clitest.RequireYAMLStdout(t, help, "help.schema.yaml")
-	assertCompactRootHelp(t, helpDoc)
-	for _, want := range []string{"create", "put", "history", "schemas"} {
-		if !strings.Contains(help.Stdout, want) {
-			t.Fatalf("help output missing %q:\n%s", want, help.Stdout)
-		}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "sched"},
+		{name: "sched help", args: []string{"help"}},
+		{name: "sched --help", args: []string{"--help"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := h.RunRaw(t, tc.args...).RequireSuccess(t)
+			text := clitest.RequireTextStdout(t, result)
+			assertRootHelpText(t, text)
+		})
 	}
-	for _, retired := range []string{"job put", "job get", "job list", "job delete", "job run", "job stop"} {
-		if strings.Contains(help.Stdout, retired) {
-			t.Fatalf("help output still lists retired command %q:\n%s", retired, help.Stdout)
-		}
-	}
-	for _, retired := range []string{"cleanup legacy", "migration status", "migration mark-imported"} {
-		if strings.Contains(help.Stdout, retired) {
-			t.Fatalf("help output still lists retired command %q:\n%s", retired, help.Stdout)
-		}
-	}
-	if help.Stderr != "" {
-		t.Fatalf("help stderr = %q", help.Stderr)
-	}
+}
+
+func TestHelpMissingAndUnknownCommands(t *testing.T) {
+	h := clitest.New(t)
 
 	missing := h.Run(t).RequireError(t)
 	assertErrorEnvelope(t, missing, "internal_error")
@@ -50,25 +47,253 @@ func TestHelpMissingAndUnknownCommands(t *testing.T) {
 	}
 }
 
-func TestCommandHelpIncludesDefaultOutputSchema(t *testing.T) {
+func TestCommandHelpRendersTerminalTextByDefault(t *testing.T) {
 	h := clitest.New(t)
 
-	result := h.RunRaw(t, "help", "create").RequireSuccess(t)
+	for _, tc := range commandHelpTestCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			result := h.RunRaw(t, tc.args...).RequireSuccess(t)
+			text := clitest.RequireTextStdout(t, result)
+			assertCommandHelpText(t, text, tc.wantFlags)
+			for _, want := range tc.want {
+				if !strings.Contains(text, want) {
+					t.Fatalf("command help missing %q:\n%s", want, text)
+				}
+			}
+		})
+	}
+}
+
+func TestCommandHelpAliasesMatchHelpCommand(t *testing.T) {
+	h := clitest.New(t)
+
+	for _, tc := range []struct {
+		name      string
+		canonical []string
+		aliases   [][]string
+	}{
+		{name: "create", canonical: []string{"help", "create"}, aliases: [][]string{{"create", "--help"}, {"create", "-h"}}},
+		{name: "systemd reconcile", canonical: []string{"help", "systemd", "reconcile"}, aliases: [][]string{{"systemd", "reconcile", "--help"}, {"systemd", "reconcile", "-h"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			canonical := h.RunRaw(t, tc.canonical...).RequireSuccess(t)
+			for _, alias := range tc.aliases {
+				result := h.RunRaw(t, alias...).RequireSuccess(t)
+				if result.Stdout != canonical.Stdout {
+					t.Fatalf("alias %v stdout differs from canonical %v:\nalias:\n%s\ncanonical:\n%s", alias, tc.canonical, result.Stdout, canonical.Stdout)
+				}
+			}
+			if _, err := os.Stat(h.StateRoot); !os.IsNotExist(err) {
+				t.Fatalf("help aliases created state root %s: %v", h.StateRoot, err)
+			}
+		})
+	}
+}
+
+func TestFullHelpEmitsStructuredYAML(t *testing.T) {
+	h := clitest.New(t)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "sched help --full", args: []string{"help", "--full"}},
+		{name: "sched --help --full", args: []string{"--help", "--full"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := h.RunRaw(t, tc.args...).RequireSuccess(t)
+			helpDoc := clitest.RequireYAMLStdout(t, result, "help.schema.yaml")
+			assertCompactRootHelp(t, helpDoc)
+		})
+	}
+
+	result := h.RunRaw(t, "help", "create", "--full").RequireSuccess(t)
 	doc := clitest.RequireYAMLStdout(t, result, "command-help.schema.yaml")
+	assertCreateCommandHelpYAML(t, doc, result.Stdout)
+}
+
+func TestCommandHelpDescribesTerminalDefaultsAndStructuredSchemas(t *testing.T) {
+	h := clitest.New(t)
+
+	result := h.RunRaw(t, "help", "create", "--full").RequireSuccess(t)
+	doc := clitest.RequireYAMLStdout(t, result, "command-help.schema.yaml")
+	assertCreateCommandHelpYAML(t, doc, result.Stdout)
+}
+
+func assertRootHelpText(t *testing.T, text string) {
+	t.Helper()
+	assertTerminalText(t, text)
+	assertHelpSections(t, text, []string{"USAGE", "COMMANDS", "FLAGS", "OUTPUT", "EXAMPLES", "SEE ALSO"})
+	for _, want := range []string{
+		"sched - local ChatInfra command scheduler",
+		"sched [global flags] <command> [command args]",
+		"create", "put", "history", "schemas",
+		"--opencode-home DIR", "default: OPENCODE_HOME or current user home",
+		"--opencode-bin PATH", "default: SCHED_OPENCODE_BIN or opencode",
+		"--systemctl BOOL", "default: true",
+		"--dry-run", "default: false",
+		"stdout: default operator commands emit concise terminal text",
+		"stderr: errors emit the YAML error envelope",
+		"sched create --command hello --agent syslog --every 5s --workdir /data/opencode/work",
+		"sched help --full", "sched help <command>", "sched schemas",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("root help missing %q:\n%s", want, text)
+		}
+	}
+	for _, retired := range []string{"job put", "job get", "job list", "job delete", "job run", "job stop"} {
+		if strings.Contains(text, retired) {
+			t.Fatalf("help output still lists retired command %q:\n%s", retired, text)
+		}
+	}
+	for _, retired := range []string{"cleanup legacy", "migration status", "migration mark-imported"} {
+		if strings.Contains(text, retired) {
+			t.Fatalf("help output still lists retired command %q:\n%s", retired, text)
+		}
+	}
+}
+
+type commandHelpCase struct {
+	name      string
+	args      []string
+	wantFlags bool
+	want      []string
+}
+
+func commandHelpTestCases() []commandHelpCase {
+	return []commandHelpCase{
+		{
+			name:      "create",
+			args:      []string{"help", "create"},
+			wantFlags: true,
+			want:      []string{"sched create - create a local interval schedule", createUsageFragment(), "--command <name>", "--schedule-id <id>", "default: derived", "--full", "default: false", "Default stdout is terminal text", "Full schema: create-full", "sched help create --full", "sched schemas", "sched create --command hello --agent syslog --every 5s --workdir /data/opencode/work"},
+		},
+		{
+			name:      "put",
+			args:      []string{"help", "put"},
+			wantFlags: true,
+			want:      []string{"sched put - upsert a schedule job from JSON stdin", "sched put --stdin [--full]", "--stdin", "default: false", "Full schema: put-full", "sched put --stdin --full < job.json"},
+		},
+		{
+			name:      "get",
+			args:      []string{"help", "get"},
+			wantFlags: true,
+			want:      []string{"sched get - read one schedule job", "sched get <scheduleId> [--full]", "Full schema: get-full", "sched get sched-1 --full"},
+		},
+		{
+			name:      "list",
+			args:      []string{"help", "list"},
+			wantFlags: true,
+			want:      []string{"sched list - list schedule jobs", "sched list [--full]", "terminal table", "Full schema: list-full", "sched list --full"},
+		},
+		{
+			name:      "delete",
+			args:      []string{"help", "delete"},
+			wantFlags: true,
+			want:      []string{"sched delete - delete one schedule job and reconcile units", "sched delete <scheduleId> [--full]", "Full schema: delete-full", "sched delete sched-1 --full"},
+		},
+		{
+			name:      "run",
+			args:      []string{"help", "run"},
+			wantFlags: true,
+			want:      []string{"sched run - run one schedule through the scheduler envelope", "sched run <scheduleId> [--source manual|scheduled] [--full]", "--source manual|scheduled", "default: manual", "Full schema: run-full", "sched run sched-1 --source manual"},
+		},
+		{
+			name:      "stop",
+			args:      []string{"help", "stop"},
+			wantFlags: true,
+			want:      []string{"sched stop - stop active systemd work for a schedule", "sched stop <scheduleId> [--full]", "Full schema: stop-full", "sched stop sched-1 --full"},
+		},
+		{
+			name:      "history",
+			args:      []string{"help", "history"},
+			wantFlags: true,
+			want:      []string{"sched history - list scheduler envelope run history", "sched history [--schedule-id <scheduleId>] [--limit N] [--full]", "--limit N", "default: 100", "Full schema: history-full", "sched history --schedule-id sched-1 --limit 20"},
+		},
+		{
+			name:      "export",
+			args:      []string{"help", "export"},
+			wantFlags: false,
+			want:      []string{"sched export - export schedule state", "sched export", "Schema: export", "sched export > sched-state.yaml"},
+		},
+		{
+			name:      "systemd reconcile",
+			args:      []string{"help", "systemd", "reconcile"},
+			wantFlags: true,
+			want:      []string{"sched systemd reconcile - render and reconcile user-systemd units", "sched systemd reconcile [--full]", "--full", "default: false", "terminal sections", "Full schema: systemd/reconcile-full", "sched help systemd reconcile --full", "sched systemd reconcile --full"},
+		},
+		{
+			name:      "schemas",
+			args:      []string{"help", "schemas"},
+			wantFlags: false,
+			want:      []string{"sched schemas - list output schemas", "sched schemas", "Schema: schemas", "structured YAML schema discovery"},
+		},
+	}
+}
+
+func assertCommandHelpText(t *testing.T, text string, wantFlags bool) {
+	t.Helper()
+	assertTerminalText(t, text)
+	sections := []string{"USAGE", "OUTPUT", "EXAMPLES", "SEE ALSO"}
+	if wantFlags {
+		sections = []string{"USAGE", "FLAGS", "OUTPUT", "EXAMPLES", "SEE ALSO"}
+	}
+	assertHelpSections(t, text, sections)
+	for _, want := range []string{"stderr: errors emit the YAML error envelope", "sched schemas"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("command help missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func assertHelpSections(t *testing.T, text string, sections []string) {
+	t.Helper()
+	last := -1
+	for _, section := range sections {
+		marker := "\n\n" + section + "\n"
+		index := strings.Index(text, marker)
+		if index < 0 {
+			t.Fatalf("help missing section %q:\n%s", section, text)
+		}
+		if index <= last {
+			t.Fatalf("help section %q appears out of order:\n%s", section, text)
+		}
+		last = index
+	}
+}
+
+func assertCreateCommandHelpYAML(t *testing.T, doc any, stdout string) {
+	t.Helper()
 	commandHelp, ok := doc.(map[string]any)
 	if !ok {
 		t.Fatalf("command help YAML = %#v, want object", doc)
 	}
-	if commandHelp["command"] != "create" || commandHelp["schema"] != "create" || commandHelp["fullSchema"] != "create-full" {
-		t.Fatalf("command help schema = %#v, want create schema", commandHelp)
+	if commandHelp["command"] != "create" || commandHelp["fullSchema"] != "create-full" {
+		t.Fatalf("command help schema = %#v, want create full schema", commandHelp)
+	}
+	if _, ok := commandHelp["schema"]; ok {
+		t.Fatalf("terminal-first command help advertises default schema: %#v", commandHelp)
 	}
 	output, _ := commandHelp["output"].(string)
-	if !strings.Contains(output, "human summary") || !strings.Contains(output, "complete structured job metadata") {
+	if !strings.Contains(output, "terminal text") || !strings.Contains(output, "structured YAML job metadata") {
 		t.Fatalf("command help output guidance = %q", output)
 	}
-	if !strings.Contains(result.Stdout, "--full") {
-		t.Fatalf("command help missing --full enrichment flag:\n%s", result.Stdout)
+	if !strings.Contains(stdout, "--full") {
+		t.Fatalf("command help missing --full enrichment flag:\n%s", stdout)
 	}
+}
+
+func assertTerminalText(t *testing.T, text string) {
+	t.Helper()
+	for _, wrapper := range []string{"tool:", "command:", "summary:", "usage:"} {
+		if strings.Contains(text, wrapper) {
+			t.Fatalf("terminal help contains YAML object wrapper %q:\n%s", wrapper, text)
+		}
+	}
+}
+
+func createUsageFragment() string {
+	return "sched create --command <name> --agent <name> --every <duration> --workdir <dir> [--schedule-id <id>] [--full]"
 }
 
 func TestSchemasDiscoveryOutput(t *testing.T) {
@@ -95,11 +320,19 @@ func TestSchemasDiscoveryOutput(t *testing.T) {
 		if description == "" {
 			t.Fatalf("schema discovery entry missing description: %#v", schema)
 		}
+		if schema["format"] != "yaml" {
+			t.Fatalf("schema discovery entry missing yaml format: %#v", schema)
+		}
 		seen[id] = true
 	}
 	for _, want := range []string{"help", "command-help", "schemas", "get-full", "list-full", "delete-full", "stop-full", "history-full", "systemd/reconcile-full"} {
 		if !seen[want] {
 			t.Fatalf("schemas discovery missing %q: %#v", want, schemas)
+		}
+	}
+	for _, retiredDefault := range []string{"create", "put", "get", "list", "delete", "run", "stop", "history", "systemd/reconcile"} {
+		if seen[retiredDefault] {
+			t.Fatalf("schemas discovery still advertises terminal default schema %q: %#v", retiredDefault, schemas)
 		}
 	}
 }

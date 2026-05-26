@@ -54,6 +54,43 @@ func TestStoreValidationAndExport(t *testing.T) {
 
 }
 
+func TestJobNotifyTargetJSONOmitEmpty(t *testing.T) {
+	data, err := json.Marshal(sampleJob())
+	if err != nil {
+		t.Fatalf("Marshal(job without notify target) error = %v", err)
+	}
+	jsonText := string(data)
+	for _, omitted := range []string{"notifyChannel", "notifyTo"} {
+		if strings.Contains(jsonText, omitted) {
+			t.Fatalf("JSON %s unexpectedly contains %q", jsonText, omitted)
+		}
+	}
+
+	var legacy Job
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		t.Fatalf("Unmarshal(legacy job) error = %v", err)
+	}
+	if legacy.NotifyChannel != nil || legacy.NotifyTo != nil {
+		t.Fatalf("legacy notify target = %#v %#v", legacy.NotifyChannel, legacy.NotifyTo)
+	}
+
+	channel := "xmpp"
+	to := "user@example.com"
+	job := sampleJob()
+	job.NotifyChannel = &channel
+	job.NotifyTo = &to
+	data, err = json.Marshal(job)
+	if err != nil {
+		t.Fatalf("Marshal(job with notify target) error = %v", err)
+	}
+	jsonText = string(data)
+	for _, want := range []string{`"notifyChannel":"xmpp"`, `"notifyTo":"user@example.com"`} {
+		if !strings.Contains(jsonText, want) {
+			t.Fatalf("JSON %s missing %q", jsonText, want)
+		}
+	}
+}
+
 func TestCronAndSystemdRendering(t *testing.T) {
 	job := sampleJob()
 	job.ScheduleExpression = "0 9 1 * 1"
@@ -80,6 +117,31 @@ func TestCronAndSystemdRendering(t *testing.T) {
 	}
 	if !strings.HasPrefix(plan.TimerName, "sched-command-") || !strings.HasSuffix(plan.TimerName, ".timer") {
 		t.Fatalf("timer name = %q", plan.TimerName)
+	}
+	for _, omitted := range []string{"SCHED_NOTIFY_CHANNEL", "SCHED_NOTIFY_TO"} {
+		if strings.Contains(plan.ServiceContent, omitted) {
+			t.Fatalf("service unexpectedly contains %q:\n%s", omitted, plan.ServiceContent)
+		}
+	}
+}
+
+func TestSystemdRenderingIncludesNotifyEnvironment(t *testing.T) {
+	channel := "xmpp"
+	to := "user@example.com"
+	job := sampleJob()
+	job.NotifyChannel = &channel
+	job.NotifyTo = &to
+	plan, _, err := RenderSystemdUnit(job, SystemdOptions{UnitDir: tempDir(t), OpenCodeHome: tempDir(t), StateRoot: filepath.Join(tempDir(t), "state"), SchedBin: "/usr/local/bin/sched"})
+	if err != nil {
+		t.Fatalf("RenderSystemdUnit() error = %v", err)
+	}
+	for _, want := range []string{
+		"Environment=SCHED_NOTIFY_CHANNEL=xmpp",
+		"Environment=SCHED_NOTIFY_TO=user@example.com",
+	} {
+		if !strings.Contains(plan.ServiceContent, want) {
+			t.Fatalf("service missing %q:\n%s", want, plan.ServiceContent)
+		}
 	}
 }
 
@@ -207,7 +269,12 @@ func TestReconcileActivePausedAndStaleUnits(t *testing.T) {
 
 func TestRunJobHistoryEnvironmentAndLocking(t *testing.T) {
 	store := newTestStore(t)
-	job, err := store.PutJob(sampleJob(), time.Now())
+	channel := "xmpp"
+	to := "user@example.com"
+	seed := sampleJob()
+	seed.NotifyChannel = &channel
+	seed.NotifyTo = &to
+	job, err := store.PutJob(seed, time.Now())
 	if err != nil {
 		t.Fatalf("PutJob() error = %v", err)
 	}
@@ -216,6 +283,8 @@ func TestRunJobHistoryEnvironmentAndLocking(t *testing.T) {
 	stub := "#!/bin/sh\n" +
 		"printf 'OPENCODE_LOG_DIR=%s\\n' \"$OPENCODE_LOG_DIR\"\n" +
 		"printf 'OPENCODE_PERMISSION=%s\\n' \"$OPENCODE_PERMISSION\"\n" +
+		"printf 'SCHED_NOTIFY_CHANNEL=%s\\n' \"$SCHED_NOTIFY_CHANNEL\"\n" +
+		"printf 'SCHED_NOTIFY_TO=%s\\n' \"$SCHED_NOTIFY_TO\"\n" +
 		"printf 'args=%s\\n' \"$*\"\n"
 	if err := os.WriteFile(opencode, []byte(stub), 0o755); err != nil {
 		t.Fatalf("write opencode stub: %v", err)
@@ -232,7 +301,7 @@ func TestRunJobHistoryEnvironmentAndLocking(t *testing.T) {
 		t.Fatalf("read run log: %v", err)
 	}
 	logText := string(logData)
-	for _, want := range []string{"OPENCODE_LOG_DIR=" + filepath.Join(home, "log"), `OPENCODE_PERMISSION={"question":"deny"}`, "--title ci-command:cmd-1:sched-1"} {
+	for _, want := range []string{"OPENCODE_LOG_DIR=" + filepath.Join(home, "log"), `OPENCODE_PERMISSION={"question":"deny"}`, "SCHED_NOTIFY_CHANNEL=xmpp", "SCHED_NOTIFY_TO=user@example.com", "--title ci-command:cmd-1:sched-1"} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("run log missing %q:\n%s", want, logText)
 		}

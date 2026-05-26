@@ -8,14 +8,16 @@ import (
 	"github.com/chatinfra/sched/internal/sched"
 )
 
-func TestListEmptyStateYAML(t *testing.T) {
+func TestListEmptyStateTerminalText(t *testing.T) {
 	h := clitest.New(t)
 
 	result := h.Run(t, "list").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "list.schema.yaml")
-	payload := decodeList(t, result.Stdout)
-	if payload.Jobs != "none" {
-		t.Fatalf("empty YAML jobs = %q", payload.Jobs)
+	stdout := clitest.RequireTextStdout(t, result)
+	if strings.TrimSpace(stdout) != "No schedules found." {
+		t.Fatalf("empty terminal list output = %q", stdout)
+	}
+	if strings.Contains(stdout, "jobs:") {
+		t.Fatalf("empty terminal list output contains YAML wrapper:\n%s", stdout)
 	}
 }
 
@@ -30,16 +32,15 @@ func TestListPopulatedStateShapeAndStableOutput(t *testing.T) {
 	))
 
 	first := h.Run(t, "list").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, first, "list.schema.yaml")
+	firstText := clitest.RequireTextStdout(t, first)
 	second := h.Run(t, "list").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, second, "list.schema.yaml")
+	secondText := clitest.RequireTextStdout(t, second)
 	if first.Stdout != second.Stdout {
-		t.Fatalf("list YAML output changed between calls:\nfirst=%s\nsecond=%s", first.Stdout, second.Stdout)
+		t.Fatalf("list terminal output changed between calls:\nfirst=%s\nsecond=%s", first.Stdout, second.Stdout)
 	}
-	payload := decodeList(t, first.Stdout)
-	lines := strings.Split(payload.Jobs, "\n")
+	lines := strings.Split(strings.TrimSuffix(firstText, "\n"), "\n")
 	if len(lines) != 3 {
-		t.Fatalf("list jobs table lines = %#v", lines)
+		t.Fatalf("list terminal table lines = %#v", lines)
 	}
 	if !strings.Contains(lines[0], "ID") || !strings.Contains(lines[0], "STATUS") || !strings.Contains(lines[0], "SCHEDULE") || !strings.Contains(lines[0], "TARGET") {
 		t.Fatalf("list jobs header = %q", lines[0])
@@ -51,12 +52,15 @@ func TestListPopulatedStateShapeAndStableOutput(t *testing.T) {
 		t.Fatalf("second list row = %q", lines[2])
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
-		if strings.Contains(first.Stdout, omitted+":") {
-			t.Fatalf("human list output includes verbose field %q:\n%s", omitted, first.Stdout)
+		if strings.Contains(firstText, omitted+":") {
+			t.Fatalf("terminal list output includes verbose field %q:\n%s", omitted, firstText)
 		}
 	}
-	if strings.Contains(first.Stdout, "{id:") || strings.Contains(first.Stdout, "- {") {
-		t.Fatalf("list output contains flow-style mapping:\n%s", first.Stdout)
+	if strings.Contains(firstText, "jobs:") || strings.Contains(firstText, "|-") || strings.Contains(firstText, "{id:") || strings.Contains(firstText, "- {") {
+		t.Fatalf("list output contains YAML wrapper or flow-style mapping:\n%s", firstText)
+	}
+	if secondText == "" {
+		t.Fatalf("second terminal output empty")
 	}
 
 	full := h.Run(t, "list", "--full").RequireSuccess(t)
@@ -67,9 +71,4 @@ func TestListPopulatedStateShapeAndStableOutput(t *testing.T) {
 	if len(fullPayload.Jobs) != 2 || fullPayload.Jobs[0].TenantID == "" || fullPayload.Jobs[0].Title == "" {
 		t.Fatalf("full list output = %#v", fullPayload.Jobs)
 	}
-}
-
-func decodeList(t *testing.T, raw string) clitest.ListResponse {
-	t.Helper()
-	return clitest.DecodeYAMLAs[clitest.ListResponse](t, raw)
 }

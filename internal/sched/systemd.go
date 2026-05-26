@@ -221,6 +221,14 @@ func RenderSystemdUnit(job Job, opts SystemdOptions) (UnitPlan, []string, error)
 		schedBin = "sched"
 	}
 	opencodeLogDir := filepath.Join(opts.OpenCodeHome, "log")
+	notifyEnvLines := ""
+	if job.NotifyChannel != nil && job.NotifyTo != nil {
+		notifyEnvLines = fmt.Sprintf(
+			"Environment=SCHED_NOTIFY_CHANNEL=%s\nEnvironment=SCHED_NOTIFY_TO=%s\n",
+			escapeUnitValue(*job.NotifyChannel),
+			escapeUnitValue(*job.NotifyTo),
+		)
+	}
 	runCommand := strings.Join([]string{
 		shellQuote(schedBin),
 		"--state-root", shellQuote(stateRoot),
@@ -236,8 +244,8 @@ Type=oneshot
 WorkingDirectory=%s
 EnvironmentFile=-%s/.env
 Environment=OPENCODE_LOG_DIR=%s
-ExecStart=/bin/sh -lc %s
-`, escapeUnitValue(job.ScheduleID), escapeUnitValue(job.Workdir), escapeUnitValue(job.Workdir), escapeUnitValue(opencodeLogDir), shellQuote("exec "+runCommand))
+%sExecStart=/bin/sh -lc %s
+`, escapeUnitValue(job.ScheduleID), escapeUnitValue(job.Workdir), escapeUnitValue(job.Workdir), escapeUnitValue(opencodeLogDir), notifyEnvLines, shellQuote("exec "+runCommand))
 	timer := fmt.Sprintf(`[Unit]
 Description=Timer for ChatInfra sched command %s
 

@@ -20,15 +20,17 @@ func TestDeleteExistingJobAndReconcilesArtifacts(t *testing.T) {
 	}
 
 	result := h.Run(t, "delete", "sched-1").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "delete.schema.yaml")
-	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, result.Stdout)
-	if summary.Summary != "deleted sched-1" {
-		t.Fatalf("delete summary = %#v", summary)
+	stdout := clitest.RequireTextStdout(t, result)
+	if strings.TrimSpace(stdout) != "Deleted schedule sched-1" {
+		t.Fatalf("delete terminal output = %q", stdout)
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
-		if strings.Contains(result.Stdout, omitted+":") {
-			t.Fatalf("human delete output includes verbose field %q:\n%s", omitted, result.Stdout)
+		if strings.Contains(stdout, omitted+":") {
+			t.Fatalf("terminal delete output includes verbose field %q:\n%s", omitted, stdout)
 		}
+	}
+	if strings.Contains(stdout, "summary:") {
+		t.Fatalf("terminal delete output contains YAML summary wrapper:\n%s", stdout)
 	}
 	if _, err := os.Stat(h.JobPath("sched-1")); !os.IsNotExist(err) {
 		t.Fatalf("job file still exists or stat failed: %v", err)
@@ -57,10 +59,9 @@ func TestDeleteMissingAndInvalidScheduleID(t *testing.T) {
 	h := clitest.New(t)
 
 	missing := h.Run(t, "delete", "missing").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, missing, "delete.schema.yaml")
-	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, missing.Stdout)
-	if !strings.Contains(summary.Summary, "not found missing") {
-		t.Fatalf("missing delete summary = %#v", summary)
+	stdout := clitest.RequireTextStdout(t, missing)
+	if !strings.Contains(stdout, "No schedule removed for missing") {
+		t.Fatalf("missing delete terminal output = %s", stdout)
 	}
 
 	invalid := h.Run(t, "delete", "bad/id").RequireError(t)

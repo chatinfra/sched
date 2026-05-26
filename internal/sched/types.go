@@ -33,6 +33,8 @@ type Job struct {
 	AgentName          string     `json:"agentName"`
 	CommandID          string     `json:"commandId"`
 	CommandName        string     `json:"commandName"`
+	NotifyChannel      *string    `json:"notifyChannel,omitempty"`
+	NotifyTo           *string    `json:"notifyTo,omitempty"`
 	ScheduleKind       string     `json:"scheduleKind"`
 	ScheduleExpression string     `json:"scheduleExpression,omitempty"`
 	Timezone           string     `json:"timezone,omitempty"`

@@ -9,7 +9,7 @@ properties:
     type: array
     items:
       type: object
-      required: [id, path, description]
+      required: [id, path, description, format]
       additionalProperties: false
       properties:
         id:
@@ -21,3 +21,5 @@ properties:
         description:
           type: string
           minLength: 1
+        format:
+          const: yaml

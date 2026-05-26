@@ -224,6 +224,17 @@ func RequireYAMLStdout(t *testing.T, result Result, schemaPath string) any {
 	return doc
 }
 
+func RequireTextStdout(t *testing.T, result Result) string {
+	t.Helper()
+	if strings.TrimSpace(result.Stdout) == "" {
+		t.Fatalf("stdout is empty; want terminal text output")
+	}
+	if result.Stderr != "" {
+		t.Fatalf("stderr = %q; want empty stderr for success", result.Stderr)
+	}
+	return result.Stdout
+}
+
 func RequireYAMLError(t *testing.T, result Result, schemaPath string) any {
 	t.Helper()
 	if result.Stdout != "" {

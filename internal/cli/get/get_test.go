@@ -8,22 +8,24 @@ import (
 	"github.com/chatinfra/sched/internal/sched"
 )
 
-func TestGetFoundJobYAMLOutput(t *testing.T) {
+func TestGetFoundJobTerminalOutput(t *testing.T) {
 	h := clitest.New(t)
 	h.PutJob(t, clitest.SampleJob())
 
 	result := h.Run(t, "get", "sched-1").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "get.schema.yaml")
-	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, result.Stdout)
-	for _, want := range []string{"sched-1", "Daily-Backup @ build-agent", "cron 0 9 * * * UTC", "workdir=/data/opencode/work"} {
-		if !strings.Contains(summary.Summary, want) {
-			t.Fatalf("get summary %q missing %q", summary.Summary, want)
+	stdout := clitest.RequireTextStdout(t, result)
+	for _, want := range []string{"sched-1", "Status:", "active", "Command:  Daily-Backup", "Agent:    build-agent", "Schedule: cron 0 9 * * * UTC", "Workdir:  /data/opencode/work"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("get terminal output missing %q:\n%s", want, stdout)
 		}
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
-		if strings.Contains(result.Stdout, omitted+":") {
-			t.Fatalf("human get output includes verbose field %q:\n%s", omitted, result.Stdout)
+		if strings.Contains(stdout, omitted+":") {
+			t.Fatalf("terminal get output includes verbose field %q:\n%s", omitted, stdout)
 		}
+	}
+	if strings.Contains(stdout, "summary:") {
+		t.Fatalf("terminal get output contains YAML summary wrapper:\n%s", stdout)
 	}
 
 	full := h.Run(t, "get", "sched-1", "--full").RequireSuccess(t)

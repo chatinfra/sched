@@ -11,7 +11,7 @@ import (
 	"github.com/chatinfra/sched/internal/sched"
 )
 
-func TestReconcileActivePausedStaleAndYAMLOutput(t *testing.T) {
+func TestReconcileActivePausedStaleAndTerminalOutput(t *testing.T) {
 	h := clitest.New(t)
 	h.PutJob(t, clitest.SampleJob(clitest.WithScheduleID("sched-active")))
 	h.PutJob(t, clitest.SampleJob(
@@ -26,16 +26,18 @@ func TestReconcileActivePausedStaleAndYAMLOutput(t *testing.T) {
 	}
 
 	result := h.Run(t, "systemd", "reconcile").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
-	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
-	if reconciled.DryRun || !strings.Contains(reconciled.Units, "sched-active") || strings.Contains(reconciled.Units, "sched-paused") {
-		t.Fatalf("reconcile units = %#v", reconciled)
+	stdout := clitest.RequireTextStdout(t, result)
+	if !strings.Contains(stdout, "Dry run: false") || !strings.Contains(stdout, "Reconciled units") || !strings.Contains(stdout, "sched-active") || strings.Contains(stdout, "sched-paused") {
+		t.Fatalf("reconcile terminal units output = %s", stdout)
 	}
-	if !strings.Contains(reconciled.Removed, "sched-command-stale.timer") {
-		t.Fatalf("removed units = %#v", reconciled.Removed)
+	if !strings.Contains(stdout, "Removed units") || !strings.Contains(stdout, "sched-command-stale.timer") {
+		t.Fatalf("removed terminal units output = %s", stdout)
 	}
-	if strings.Contains(result.Stdout, "{id:") || strings.Contains(result.Stdout, "- {") {
-		t.Fatalf("reconcile output contains flow-style mapping:\n%s", result.Stdout)
+	if !strings.Contains(stdout, "Warnings\nNo warnings.") {
+		t.Fatalf("reconcile terminal warnings empty state missing:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "units:") || strings.Contains(stdout, "dryRun:") || strings.Contains(stdout, "{id:") || strings.Contains(stdout, "- {") {
+		t.Fatalf("reconcile output contains YAML wrapper or flow-style mapping:\n%s", stdout)
 	}
 	full := h.Run(t, "systemd", "reconcile", "--full").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, full, "systemd/reconcile-full.schema.yaml")
@@ -67,16 +69,16 @@ func TestReconcileSuppressesActiveJobWithoutChangingStoredStatus(t *testing.T) {
 	}
 
 	result := h.Run(t, "systemd", "reconcile").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
-	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
-	if !strings.Contains(reconciled.Units, "sched-active") || strings.Contains(reconciled.Units, "sched-suppressed") {
-		t.Fatalf("reconcile units = %#v", reconciled.Units)
+	stdout := clitest.RequireTextStdout(t, result)
+	unitsSection := sectionBetween(stdout, "Reconciled units", "\n\nRemoved units")
+	if !strings.Contains(unitsSection, "sched-active") || strings.Contains(unitsSection, "sched-suppressed") {
+		t.Fatalf("reconcile terminal units = %s", stdout)
 	}
-	if !strings.Contains(reconciled.Removed, filepath.Base(staleService)) || !strings.Contains(reconciled.Removed, filepath.Base(staleTimer)) {
-		t.Fatalf("removed units = %#v", reconciled.Removed)
+	if !strings.Contains(stdout, filepath.Base(staleService)) || !strings.Contains(stdout, filepath.Base(staleTimer)) {
+		t.Fatalf("removed terminal units = %s", stdout)
 	}
-	if !strings.Contains(reconciled.Warnings, "suppressed sched-suppressed") {
-		t.Fatalf("warnings = %#v", reconciled.Warnings)
+	if !strings.Contains(stdout, "suppressed sched-suppressed") {
+		t.Fatalf("terminal warnings = %s", stdout)
 	}
 
 	stored := h.Run(t, "get", "sched-suppressed", "--full").RequireSuccess(t)
@@ -96,13 +98,12 @@ func TestReconcileDryRunSummaryPreservesStaleUnits(t *testing.T) {
 	}
 
 	result := h.Run(t, "--dry-run", "systemd", "reconcile").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
-	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
-	if !reconciled.DryRun || !strings.Contains(reconciled.Units, "sched-1") || !strings.Contains(reconciled.Removed, "sched-command-stale.service") {
-		t.Fatalf("dry-run YAML output = %#v", reconciled)
+	stdout := clitest.RequireTextStdout(t, result)
+	if !strings.Contains(stdout, "Dry run: true") || !strings.Contains(stdout, "sched-1") || !strings.Contains(stdout, "sched-command-stale.service") {
+		t.Fatalf("dry-run terminal output = %s", stdout)
 	}
-	if strings.Contains(result.Stdout, "{id:") || strings.Contains(result.Stdout, "- {") {
-		t.Fatalf("reconcile output contains flow-style mapping:\n%s", result.Stdout)
+	if strings.Contains(stdout, "units:") || strings.Contains(stdout, "dryRun:") || strings.Contains(stdout, "{id:") || strings.Contains(stdout, "- {") {
+		t.Fatalf("reconcile output contains YAML wrapper or flow-style mapping:\n%s", stdout)
 	}
 	if _, err := os.Stat(stalePath); err != nil {
 		t.Fatalf("dry-run removed stale unit: %v", err)
@@ -114,10 +115,9 @@ func TestReconcileUsesConfiguredStableSchedLauncherPath(t *testing.T) {
 	h.PutJob(t, clitest.SampleJob(clitest.WithScheduleID("sched-stable-launcher")))
 
 	result := h.Run(t, "--sched-bin", "/data/opencode/bin/sched", "systemd", "reconcile").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "systemd/reconcile.schema.yaml")
-	reconciled := clitest.DecodeYAMLAs[clitest.ReconcileSummary](t, result.Stdout)
-	if !strings.Contains(reconciled.Units, "sched-stable-launcher") {
-		t.Fatalf("reconcile units = %#v", reconciled.Units)
+	stdout := clitest.RequireTextStdout(t, result)
+	if !strings.Contains(stdout, "sched-stable-launcher") {
+		t.Fatalf("reconcile terminal units = %s", stdout)
 	}
 	full := h.Run(t, "--sched-bin", "/data/opencode/bin/sched", "systemd", "reconcile", "--full").RequireSuccess(t)
 	clitest.RequireYAMLStdout(t, full, "systemd/reconcile-full.schema.yaml")
@@ -143,6 +143,18 @@ func TestReconcileUsesConfiguredStableSchedLauncherPath(t *testing.T) {
 	}
 }
 
+func TestReconcileEmptySectionsUseTerminalText(t *testing.T) {
+	h := clitest.New(t)
+
+	result := h.Run(t, "systemd", "reconcile").RequireSuccess(t)
+	stdout := clitest.RequireTextStdout(t, result)
+	for _, want := range []string{"Dry run: false", "No units reconciled.", "No stale units removed.", "No warnings."} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("empty reconcile output missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
 func TestReconcileUsageErrors(t *testing.T) {
 	h := clitest.New(t)
 
@@ -152,4 +164,17 @@ func TestReconcileUsageErrors(t *testing.T) {
 	if envelope.Error.Code != "internal_error" || !strings.Contains(envelope.Error.Message, "usage: sched systemd reconcile") {
 		t.Fatalf("usage envelope = %#v", envelope.Error)
 	}
+}
+
+func sectionBetween(value, start, end string) string {
+	startIndex := strings.Index(value, start)
+	if startIndex < 0 {
+		return ""
+	}
+	value = value[startIndex:]
+	endIndex := strings.Index(value, end)
+	if endIndex < 0 {
+		return value
+	}
+	return value[:endIndex]
 }

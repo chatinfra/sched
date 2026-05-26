@@ -7,23 +7,22 @@ import (
 	"github.com/chatinfra/sched/internal/cli/clitest"
 )
 
-func TestStopCompactYAMLOutput(t *testing.T) {
+func TestStopCompactTerminalOutput(t *testing.T) {
 	h := clitest.New(t)
 	h.PutJob(t, clitest.SampleJob())
 
 	result := h.Run(t, "stop", "sched-1").RequireSuccess(t)
-	clitest.RequireYAMLStdout(t, result, "stop.schema.yaml")
-	summary := clitest.DecodeYAMLAs[clitest.SummaryResponse](t, result.Stdout)
-	if !strings.Contains(summary.Summary, "not stopped sched-1") || !strings.Contains(summary.Summary, "systemctl disabled") {
-		t.Fatalf("stop summary = %#v", summary)
+	stdout := clitest.RequireTextStdout(t, result)
+	if !strings.Contains(stdout, "No active work stopped for schedule sched-1") || !strings.Contains(stdout, "systemctl disabled") {
+		t.Fatalf("stop terminal output = %s", stdout)
 	}
 	for _, omitted := range []string{"schemaVersion", "tenantId", "opencodeId", "commandId", "title", "createdAt", "updatedAt"} {
-		if strings.Contains(result.Stdout, omitted+":") {
-			t.Fatalf("human stop output includes verbose field %q:\n%s", omitted, result.Stdout)
+		if strings.Contains(stdout, omitted+":") {
+			t.Fatalf("terminal stop output includes verbose field %q:\n%s", omitted, stdout)
 		}
 	}
-	if strings.Contains(result.Stdout, "serviceName:") || strings.Contains(result.Stdout, "stopped:") {
-		t.Fatalf("human stop output includes structured stop fields:\n%s", result.Stdout)
+	if strings.Contains(stdout, "serviceName:") || strings.Contains(stdout, "stopped:") || strings.Contains(stdout, "summary:") {
+		t.Fatalf("terminal stop output includes structured stop fields or YAML wrapper:\n%s", stdout)
 	}
 
 	full := h.Run(t, "stop", "sched-1", "--full").RequireSuccess(t)
