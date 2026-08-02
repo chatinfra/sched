@@ -10,9 +10,13 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 )
 
-const managedUnitPrefix = "sched-command-"
+const (
+	managedUnitPrefix     = "sched-command-"
+	superdirServeUnitBase = "superdir-serve"
+)
 
 var nonTokenChars = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -20,6 +24,8 @@ type SystemdOptions struct {
 	UnitDir      string
 	StateRoot    string
 	OpenCodeHome string
+	FromRepoDir  string
+	RepoRoot     string
 	SchedBin     string
 	SystemctlBin string
 	Apply        bool
@@ -65,10 +71,20 @@ func ReconcileSystemd(store *Store, opts SystemdOptions) (ReconcileResult, error
 	if store == nil {
 		return ReconcileResult{}, Errorf("invalid_state_root", "store is required")
 	}
+	opts = normalizeSystemdOptions(store, opts)
+	var repoPlans []UnitPlan
+	var repoSummaries []UnitSummary
+	var repoWarnings []string
+	if strings.TrimSpace(opts.FromRepoDir) != "" {
+		var err error
+		repoPlans, repoSummaries, repoWarnings, err = repoOperatorUnitPlans(opts)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+	}
 	if err := store.Ensure(); err != nil {
 		return ReconcileResult{}, err
 	}
-	opts = normalizeSystemdOptions(store, opts)
 	if err := os.MkdirAll(opts.UnitDir, 0o755); err != nil {
 		return ReconcileResult{}, WrapError("systemd_write_failed", err, "failed to create systemd unit directory %s", opts.UnitDir)
 	}
@@ -83,6 +99,7 @@ func ReconcileSystemd(store *Store, opts SystemdOptions) (ReconcileResult, error
 		return ReconcileResult{}, err
 	}
 	desired := map[string]UnitPlan{}
+	plans := map[string]UnitPlan{}
 	result := ReconcileResult{Units: []UnitSummary{}, Removed: []string{}, DryRun: opts.DryRun}
 	for _, job := range jobs {
 		if job.Status != StatusActive {
@@ -110,6 +127,7 @@ func ReconcileSystemd(store *Store, opts SystemdOptions) (ReconcileResult, error
 		}
 		desired[plan.ServiceName] = plan
 		desired[plan.TimerName] = plan
+		plans[plan.BaseName] = plan
 		summary := UnitSummary{ScheduleID: job.ScheduleID, ServiceName: plan.ServiceName, TimerName: plan.TimerName, ScheduleKind: job.ScheduleKind}
 		if summary.ScheduleKind == ScheduleKindInterval {
 			summary.IntervalDuration = job.IntervalDuration
@@ -118,7 +136,31 @@ func ReconcileSystemd(store *Store, opts SystemdOptions) (ReconcileResult, error
 			summary.Calendar = calendars
 		}
 		result.Units = append(result.Units, summary)
-		if !opts.DryRun {
+	}
+
+	if strings.TrimSpace(opts.FromRepoDir) != "" {
+		result.Warnings = append(result.Warnings, repoWarnings...)
+		for i, plan := range repoPlans {
+			if _, ok := desired[plan.ServiceName]; ok {
+				return ReconcileResult{}, Errorf("duplicate_systemd_unit", "systemd unit %s is produced more than once", plan.ServiceName)
+			}
+			if _, ok := desired[plan.TimerName]; ok {
+				return ReconcileResult{}, Errorf("duplicate_systemd_unit", "systemd unit %s is produced more than once", plan.TimerName)
+			}
+			desired[plan.ServiceName] = plan
+			desired[plan.TimerName] = plan
+			plans[plan.BaseName] = plan
+			result.Units = append(result.Units, repoSummaries[i])
+		}
+	}
+
+	if !opts.DryRun {
+		writePlans := make([]UnitPlan, 0, len(plans))
+		for _, plan := range plans {
+			writePlans = append(writePlans, plan)
+		}
+		sort.Slice(writePlans, func(i, j int) bool { return writePlans[i].TimerName < writePlans[j].TimerName })
+		for _, plan := range writePlans {
 			if err := writeFileAtomic(plan.ServicePath, []byte(plan.ServiceContent), 0o644); err != nil {
 				return ReconcileResult{}, WrapError("systemd_write_failed", err, "failed to write %s", plan.ServicePath)
 			}
@@ -128,7 +170,7 @@ func ReconcileSystemd(store *Store, opts SystemdOptions) (ReconcileResult, error
 		}
 	}
 
-	existing, err := managedUnitFiles(opts.UnitDir)
+	existing, err := pruneCandidateUnitFiles(opts)
 	if err != nil {
 		return ReconcileResult{}, err
 	}
@@ -269,6 +311,284 @@ WantedBy=timers.target
 	}, calendars, nil
 }
 
+type xSchedMetadata struct {
+	Present bool
+	Managed bool
+	ID      string
+}
+
+func repoOperatorUnitPlans(opts SystemdOptions) ([]UnitPlan, []UnitSummary, []string, error) {
+	repoUnitDir := strings.TrimSpace(opts.FromRepoDir)
+	if repoUnitDir == "" {
+		return nil, nil, nil, nil
+	}
+	absDir, err := filepath.Abs(repoUnitDir)
+	if err != nil {
+		return nil, nil, nil, WrapError("systemd_read_failed", err, "failed to resolve repo unit directory %s", repoUnitDir)
+	}
+	repoRoot := strings.TrimSpace(opts.RepoRoot)
+	if repoRoot == "" {
+		return nil, nil, nil, Errorf("missing_repo_root", "--repo-root is required with --from-repo")
+	}
+	if !filepath.IsAbs(repoRoot) {
+		return nil, nil, nil, Errorf("invalid_repo_root", "--repo-root must be an absolute path")
+	}
+	repoRoot = filepath.Clean(repoRoot)
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		return nil, nil, nil, WrapError("systemd_read_failed", err, "failed to read repo unit directory %s", absDir)
+	}
+	bases := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		switch {
+		case strings.HasSuffix(name, ".service"):
+			bases[strings.TrimSuffix(name, ".service")] = true
+		case strings.HasSuffix(name, ".timer"):
+			bases[strings.TrimSuffix(name, ".timer")] = true
+		}
+	}
+	sortedBases := make([]string, 0, len(bases))
+	for base := range bases {
+		sortedBases = append(sortedBases, base)
+	}
+	sort.Strings(sortedBases)
+
+	var plans []UnitPlan
+	var summaries []UnitSummary
+	var warnings []string
+	for _, base := range sortedBases {
+		servicePath := filepath.Join(absDir, base+".service")
+		timerPath := filepath.Join(absDir, base+".timer")
+		serviceData, serviceErr := os.ReadFile(servicePath)
+		timerData, timerErr := os.ReadFile(timerPath)
+		serviceMeta := parseXSchedSection(string(serviceData))
+		timerMeta := parseXSchedSection(string(timerData))
+		if isReservedOperatorUnitBase(base) && (serviceMeta.Managed || timerMeta.Managed) {
+			return nil, nil, nil, Errorf("reserved_operator_unit_name", "operator unit %s uses a reserved unit name", base)
+		}
+		if serviceErr != nil || timerErr != nil {
+			warnings = append(warnings, fmt.Sprintf("ignored %s: missing .service/.timer pair", base))
+			continue
+		}
+		if !serviceMeta.Managed && !timerMeta.Managed {
+			warnings = append(warnings, fmt.Sprintf("ignored %s: missing [X-Sched] Managed=true", base))
+			continue
+		}
+		if !serviceMeta.Managed || !timerMeta.Managed {
+			warnings = append(warnings, fmt.Sprintf("ignored %s: both service and timer must declare [X-Sched] Managed=true", base))
+			continue
+		}
+		id := strings.TrimSpace(serviceMeta.ID)
+		if id == "" || strings.TrimSpace(timerMeta.ID) == "" {
+			return nil, nil, nil, Errorf("invalid_x_sched_unit", "operator unit %s must set [X-Sched] Id in both service and timer", base)
+		}
+		if id != strings.TrimSpace(timerMeta.ID) {
+			return nil, nil, nil, Errorf("invalid_x_sched_unit", "operator unit %s has mismatched [X-Sched] Id values", base)
+		}
+		serviceName := base + ".service"
+		timerName := base + ".timer"
+		renderedService := strings.ReplaceAll(string(serviceData), "@REPO_ROOT@", repoRoot)
+		renderedTimer := strings.ReplaceAll(string(timerData), "@REPO_ROOT@", repoRoot)
+		if err := validateOperatorExecStarts(serviceName, renderedService, repoRoot); err != nil {
+			return nil, nil, nil, err
+		}
+		plan := UnitPlan{
+			ScheduleID:     id,
+			BaseName:       base,
+			ServiceName:    serviceName,
+			TimerName:      timerName,
+			ServicePath:    filepath.Join(opts.UnitDir, serviceName),
+			TimerPath:      filepath.Join(opts.UnitDir, timerName),
+			ServiceContent: renderedService,
+			TimerContent:   renderedTimer,
+		}
+		plans = append(plans, plan)
+		summaries = append(summaries, repoUnitSummary(plan, renderedTimer))
+	}
+	return plans, summaries, warnings, nil
+}
+
+func repoUnitSummary(plan UnitPlan, timerContent string) UnitSummary {
+	summary := UnitSummary{ScheduleID: plan.ScheduleID, ServiceName: plan.ServiceName, TimerName: plan.TimerName, ScheduleKind: "operator"}
+	if calendars := timerSectionValues(timerContent, "OnCalendar"); len(calendars) > 0 {
+		summary.ScheduleKind = ScheduleKindCron
+		summary.Calendar = calendars
+		return summary
+	}
+	if intervals := timerSectionValues(timerContent, "OnUnitActiveSec"); len(intervals) > 0 {
+		summary.ScheduleKind = ScheduleKindInterval
+		summary.IntervalDuration = intervals[0]
+		return summary
+	}
+	if intervals := timerSectionValues(timerContent, "OnBootSec"); len(intervals) > 0 {
+		summary.ScheduleKind = ScheduleKindInterval
+		summary.IntervalDuration = intervals[0]
+	}
+	return summary
+}
+
+func validateOperatorExecStarts(unitName, content, repoRoot string) error {
+	execStarts := serviceSectionValues(content, "ExecStart")
+	if len(execStarts) == 0 {
+		return Errorf("invalid_exec_start", "operator unit %s has no ExecStart", unitName)
+	}
+	for _, command := range execStarts {
+		execPath := execStartPath(command)
+		if execPath == "" || !filepath.IsAbs(execPath) {
+			return Errorf("invalid_exec_start", "operator unit %s has invalid ExecStart executable %q", unitName, execPath)
+		}
+		execPath = filepath.Clean(execPath)
+		if pathWithin(execPath, repoRoot) {
+			return Errorf("repo_contained_exec_start", "operator unit %s ExecStart executable %s is inside repository root %s", unitName, execPath, repoRoot)
+		}
+		info, err := os.Stat(execPath)
+		if err != nil {
+			return Errorf("invalid_exec_start", "operator unit %s ExecStart executable %s is not available: %v", unitName, execPath, err)
+		}
+		resolvedPath, err := filepath.EvalSymlinks(execPath)
+		if err != nil {
+			return Errorf("invalid_exec_start", "operator unit %s ExecStart executable %s cannot be resolved: %v", unitName, execPath, err)
+		}
+		resolvedRoot := repoRoot
+		if resolved, err := filepath.EvalSymlinks(repoRoot); err == nil {
+			resolvedRoot = resolved
+		}
+		if pathWithin(resolvedPath, resolvedRoot) {
+			return Errorf("repo_contained_exec_start", "operator unit %s ExecStart executable %s resolves inside repository root %s", unitName, execPath, repoRoot)
+		}
+		if !info.Mode().IsRegular() || syscall.Access(execPath, 1) != nil {
+			return Errorf("invalid_exec_start", "operator unit %s ExecStart executable %s is not executable by the invoking user", unitName, execPath)
+		}
+	}
+	return nil
+}
+
+func serviceSectionValues(content, key string) []string {
+	var values []string
+	inService := false
+	for _, rawLine := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			end := strings.Index(line, "]")
+			inService = end >= 0 && strings.EqualFold(strings.TrimSpace(line[1:end]), "Service")
+			continue
+		}
+		if !inService {
+			continue
+		}
+		field, value, ok := strings.Cut(line, "=")
+		if ok && strings.EqualFold(strings.TrimSpace(field), key) && strings.TrimSpace(value) != "" {
+			values = append(values, strings.TrimSpace(value))
+		}
+	}
+	return values
+}
+
+func execStartPath(command string) string {
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Trim(strings.TrimLeft(fields[0], "-@:+!"), "\"'")
+}
+
+func pathWithin(path, root string) bool {
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func parseXSchedSection(content string) xSchedMetadata {
+	metadata := xSchedMetadata{}
+	inSection := false
+	for _, rawLine := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			end := strings.Index(line, "]")
+			if end < 0 {
+				inSection = false
+				continue
+			}
+			section := strings.TrimSpace(line[1:end])
+			inSection = strings.EqualFold(section, "X-Sched")
+			if inSection {
+				metadata.Present = true
+			}
+			continue
+		}
+		if !inSection {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "managed":
+			metadata.Managed = parseUnitBool(value)
+		case "id":
+			metadata.ID = unitMetadataValue(value)
+		}
+	}
+	return metadata
+}
+
+func parseUnitBool(raw string) bool {
+	switch strings.ToLower(unitMetadataValue(raw)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func unitMetadataValue(raw string) string {
+	value := strings.TrimSpace(raw)
+	for _, marker := range []string{" #", "\t#", " ;", "\t;"} {
+		if index := strings.Index(value, marker); index >= 0 {
+			value = value[:index]
+		}
+	}
+	return strings.TrimSpace(value)
+}
+
+func timerSectionValues(content string, key string) []string {
+	var values []string
+	inTimer := false
+	for _, rawLine := range strings.Split(content, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			end := strings.Index(line, "]")
+			if end < 0 {
+				inTimer = false
+				continue
+			}
+			inTimer = strings.EqualFold(strings.TrimSpace(line[1:end]), "Timer")
+			continue
+		}
+		if !inTimer {
+			continue
+		}
+		field, value, ok := strings.Cut(line, "=")
+		if ok && strings.EqualFold(strings.TrimSpace(field), key) {
+			values = append(values, unitMetadataValue(value))
+		}
+	}
+	return values
+}
+
 func timerScheduleLines(job Job) ([]string, []string, error) {
 	switch normalizeScheduleKind(job.ScheduleKind) {
 	case ScheduleKindCron:
@@ -330,6 +650,13 @@ func normalizeSystemdOptions(store *Store, opts SystemdOptions) SystemdOptions {
 	return opts
 }
 
+func pruneCandidateUnitFiles(opts SystemdOptions) ([]string, error) {
+	if strings.TrimSpace(opts.FromRepoDir) != "" {
+		return managedOperatorUnitFiles(opts.UnitDir)
+	}
+	return managedUnitFiles(opts.UnitDir)
+}
+
 func managedUnitFiles(unitDir string) ([]string, error) {
 	entries, err := os.ReadDir(unitDir)
 	if err != nil {
@@ -350,6 +677,52 @@ func managedUnitFiles(unitDir string) ([]string, error) {
 	}
 	sort.Strings(paths)
 	return paths, nil
+}
+
+func managedOperatorUnitFiles(unitDir string) ([]string, error) {
+	entries, err := os.ReadDir(unitDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, WrapError("systemd_read_failed", err, "failed to read systemd unit directory %s", unitDir)
+	}
+	var paths []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		base, isUnit := systemdUnitBase(name)
+		if !isUnit || isReservedOperatorUnitBase(base) {
+			continue
+		}
+		path := filepath.Join(unitDir, name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, WrapError("systemd_read_failed", err, "failed to read installed systemd unit %s", path)
+		}
+		if parseXSchedSection(string(data)).Managed {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func isReservedOperatorUnitBase(base string) bool {
+	return strings.HasPrefix(base, managedUnitPrefix) || base == superdirServeUnitBase
+}
+
+func systemdUnitBase(name string) (string, bool) {
+	switch {
+	case strings.HasSuffix(name, ".service"):
+		return strings.TrimSuffix(name, ".service"), true
+	case strings.HasSuffix(name, ".timer"):
+		return strings.TrimSuffix(name, ".timer"), true
+	default:
+		return "", false
+	}
 }
 
 func systemctl(opts SystemdOptions, args ...string) error {

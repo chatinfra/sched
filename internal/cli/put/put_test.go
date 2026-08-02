@@ -1,6 +1,7 @@
 package put
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -77,6 +78,58 @@ func TestPutIdempotentUpdatePreservesCreatedAt(t *testing.T) {
 	stdout := clitest.RequireTextStdout(t, listResult)
 	if !strings.Contains(stdout, "Deploy-Production @ build-agent") {
 		t.Fatalf("list after update = %s", stdout)
+	}
+}
+
+func TestPutManyPersistsOrderedJobsAndReconcilesCompleteSet(t *testing.T) {
+	h := clitest.New(t)
+	first := clitest.SampleJob()
+	second := clitest.SampleJob(clitest.WithScheduleID("sched-2"), clitest.WithCommandName("Weekly-Report"))
+	input, err := json.Marshal([]sched.Job{first, second})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+
+	result := h.RunWithStdin(t, string(input), "put-many", "--stdin", "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, result, "put-many-full.schema.yaml")
+	response := clitest.DecodeYAMLAs[struct {
+		Jobs []sched.Job `json:"jobs"`
+	}](t, result.Stdout)
+	if len(response.Jobs) != 2 || response.Jobs[0].ScheduleID != "sched-1" || response.Jobs[1].ScheduleID != "sched-2" {
+		t.Fatalf("put-many jobs = %#v", response.Jobs)
+	}
+	for _, scheduleID := range []string{"sched-1", "sched-2"} {
+		if _, err := os.Stat(h.JobPath(scheduleID)); err != nil {
+			t.Fatalf("persisted job %s missing: %v", scheduleID, err)
+		}
+	}
+	units, err := os.ReadDir(h.SystemdDir)
+	if err != nil {
+		t.Fatalf("ReadDir(systemd) error = %v", err)
+	}
+	if len(units) != 4 {
+		t.Fatalf("reconciled unit count = %d, want 4 for the complete two-job set", len(units))
+	}
+}
+
+func TestPutManyRejectsEmptyInputAndPreservesEarlierWriteOnLaterValidationFailure(t *testing.T) {
+	h := clitest.New(t)
+	empty := h.RunWithStdin(t, `[]`, "put-many", "--stdin", "--full").RequireError(t)
+	assertErrorCode(t, empty, "invalid_job")
+
+	invalidSecond := clitest.SampleJob(clitest.WithScheduleID("sched-2"))
+	invalidSecond.TenantID = ""
+	input, err := json.Marshal([]sched.Job{clitest.SampleJob(), invalidSecond})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	failed := h.RunWithStdin(t, string(input), "put-many", "--stdin", "--full").RequireError(t)
+	assertErrorCode(t, failed, "invalid_job")
+	if _, err := os.Stat(h.JobPath("sched-1")); err != nil {
+		t.Fatalf("first ordered write missing after second validation failure: %v", err)
+	}
+	if _, err := os.Stat(h.JobPath("sched-2")); !os.IsNotExist(err) {
+		t.Fatalf("invalid second write exists or stat failed unexpectedly: %v", err)
 	}
 }
 

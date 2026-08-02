@@ -127,7 +127,7 @@ func assertRootHelpText(t *testing.T, text string) {
 	for _, want := range []string{
 		"sched - local ChatInfra command scheduler",
 		"sched [global flags] <command> [command args]",
-		"create", "put", "history", "schemas",
+		"create", "put", "put-many", "history", "schemas",
 		"--opencode-home DIR", "default: OPENCODE_HOME or current user home",
 		"--opencode-bin PATH", "default: SCHED_OPENCODE_BIN or opencode",
 		"--systemctl BOOL", "default: true",
@@ -175,6 +175,12 @@ func commandHelpTestCases() []commandHelpCase {
 			want:      []string{"sched put - upsert a schedule job from JSON stdin", "sched put --stdin [--full]", "--stdin", "default: false", "Full schema: put-full", "sched put --stdin --full < job.json"},
 		},
 		{
+			name:      "put-many",
+			args:      []string{"help", "put-many"},
+			wantFlags: true,
+			want:      []string{"sched put-many - upsert schedule jobs from a JSON array", "sched put-many --stdin [--full]", "--stdin", "default: false", "Full schema: put-many-full"},
+		},
+		{
 			name:      "get",
 			args:      []string{"help", "get"},
 			wantFlags: true,
@@ -220,7 +226,7 @@ func commandHelpTestCases() []commandHelpCase {
 			name:      "systemd reconcile",
 			args:      []string{"help", "systemd", "reconcile"},
 			wantFlags: true,
-			want:      []string{"sched systemd reconcile - render and reconcile user-systemd units", "sched systemd reconcile [--full]", "--full", "default: false", "terminal sections", "Full schema: systemd/reconcile-full", "sched help systemd reconcile --full", "sched systemd reconcile --full"},
+			want:      []string{"sched systemd reconcile - render and reconcile user-systemd units", "sched systemd reconcile [--from-repo <dir> --repo-root <absolute-path>] [--full]", "--from-repo <dir>", "--repo-root <absolute-path>", "--full", "default: false", "terminal sections", "Full schema: systemd/reconcile-full", "sched help systemd reconcile --full", "sched systemd reconcile --from-repo systemd/user --repo-root /home/operator/super --dry-run", "sched systemd reconcile --full"},
 		},
 		{
 			name:      "schemas",
@@ -301,6 +307,7 @@ func TestSchemasDiscoveryOutput(t *testing.T) {
 
 	result := h.Run(t, "schemas").RequireSuccess(t)
 	doc := clitest.RequireYAMLStdout(t, result, "schemas.schema.yaml")
+	clitest.RequireSchemaDiscoveryPaths(t, doc)
 	discovery, ok := doc.(map[string]any)
 	if !ok {
 		t.Fatalf("schemas YAML = %#v, want object", doc)
@@ -325,7 +332,7 @@ func TestSchemasDiscoveryOutput(t *testing.T) {
 		}
 		seen[id] = true
 	}
-	for _, want := range []string{"help", "command-help", "schemas", "get-full", "list-full", "delete-full", "stop-full", "history-full", "systemd/reconcile-full"} {
+	for _, want := range []string{"help", "command-help", "schemas", "get-full", "put-many-full", "list-full", "delete-full", "stop-full", "history-full", "systemd/reconcile-full"} {
 		if !seen[want] {
 			t.Fatalf("schemas discovery missing %q: %#v", want, schemas)
 		}

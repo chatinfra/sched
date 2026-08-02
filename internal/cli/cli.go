@@ -22,6 +22,8 @@ type options struct {
 	stateRoot    string
 	opencodeHome string
 	systemdDir   string
+	fromRepoDir  string
+	repoRoot     string
 	schedBin     string
 	opencodeBin  string
 	systemctl    bool
@@ -196,7 +198,7 @@ func run(args []string, opts options, stdin io.Reader, stdout io.Writer) error {
 	switch cmd {
 	case "create":
 		return runCreateCommand(store, opts, stdout, cmdArgs)
-	case "put", "get", "list", "delete", "run", "stop":
+	case "put", "put-many", "get", "list", "delete", "run", "stop":
 		return runScheduleCommand(store, opts, stdin, stdout, args)
 	case "history":
 		return runHistoryCommand(store, opts, stdout, cmdArgs)
@@ -436,6 +438,46 @@ func runScheduleCommand(store *sched.Store, opts options, stdin io.Reader, stdou
 			return writeYAML(stdout, persisted)
 		}
 		return writeText(stdout, jobTerminalOutput(persisted, "upserted", true))
+	case "put-many":
+		fs := flag.NewFlagSet("sched put-many", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		fromStdin := fs.Bool("stdin", false, "read job array JSON from stdin")
+		full := fs.Bool("full", false, "emit complete persisted job metadata")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if !*fromStdin {
+			return errors.New("usage: sched put-many --stdin")
+		}
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return err
+		}
+		var jobs []sched.Job
+		if err := json.Unmarshal(data, &jobs); err != nil {
+			return sched.WrapError("invalid_json", err, "failed to parse job array JSON")
+		}
+		if len(jobs) == 0 {
+			return sched.NewCommandError("invalid_job", "at least one schedule job is required")
+		}
+		persisted := make([]sched.Job, 0, len(jobs))
+		for _, job := range jobs {
+			stored, err := store.PutJob(job, nowUTC())
+			if err != nil {
+				return err
+			}
+			persisted = append(persisted, stored)
+		}
+		if _, err := reconcile(store, opts); err != nil {
+			return err
+		}
+		response := struct {
+			Jobs []sched.Job `json:"jobs"`
+		}{Jobs: persisted}
+		if *full {
+			return writeYAML(stdout, response)
+		}
+		return writeText(stdout, listJobsOutput(persisted))
 	case "get":
 		full, positional, err := parseFullFlag(args[1:])
 		if err != nil {
@@ -580,20 +622,34 @@ func runHistoryCommand(store *sched.Store, opts options, stdout io.Writer, args 
 
 func runSystemdCommand(store *sched.Store, opts options, stdout io.Writer, args []string) error {
 	if len(args) == 0 || args[0] != "reconcile" {
-		return errors.New("usage: sched systemd reconcile")
+		return errors.New("usage: sched systemd reconcile [--from-repo <dir> --repo-root <absolute-path>] [--full]")
 	}
-	full, positional, err := parseFullFlag(args[1:])
-	if err != nil {
+	fs := flag.NewFlagSet("sched systemd reconcile", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fromRepo := fs.String("from-repo", "", "read checked-in operator systemd units from directory")
+	repoRoot := fs.String("repo-root", "", "durable absolute repository root used for operator units")
+	full := fs.Bool("full", false, "emit complete reconciliation metadata")
+	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	if len(positional) != 0 {
-		return errors.New("usage: sched systemd reconcile [--full]")
+	if fs.NArg() != 0 {
+		return errors.New("usage: sched systemd reconcile [--from-repo <dir> --repo-root <absolute-path>] [--full]")
+	}
+	opts.fromRepoDir = strings.TrimSpace(*fromRepo)
+	opts.repoRoot = strings.TrimSpace(*repoRoot)
+	if opts.fromRepoDir != "" && opts.repoRoot == "" {
+		return sched.NewCommandError("missing_repo_root", "--repo-root is required with --from-repo",
+			sched.WithArgument("--repo-root"),
+			sched.WithExpected("an absolute durable repository path"),
+			sched.WithHint("Add --repo-root <absolute-path>."),
+			sched.WithUsage("sched systemd reconcile --from-repo <dir> --repo-root <absolute-path> [--full]"),
+		)
 	}
 	result, err := reconcile(store, opts)
 	if err != nil {
 		return err
 	}
-	if full {
+	if *full {
 		return writeYAML(stdout, result)
 	}
 	return writeText(stdout, reconcileTerminalOutput(result))
@@ -604,6 +660,8 @@ func reconcile(store *sched.Store, opts options) (sched.ReconcileResult, error) 
 		UnitDir:      opts.systemdDir,
 		StateRoot:    opts.stateRoot,
 		OpenCodeHome: opts.opencodeHome,
+		FromRepoDir:  opts.fromRepoDir,
+		RepoRoot:     opts.repoRoot,
 		SchedBin:     opts.schedBin,
 		Apply:        opts.systemctl,
 		DryRun:       opts.dryRun,
@@ -843,6 +901,7 @@ func commandHelps() []map[string]any {
 	return []map[string]any{
 		{"command": "create", "summary": "create a local interval schedule", "usage": createUsageCommand, "output": "Default stdout is terminal text for operators; use --full for complete structured YAML job metadata.", "flags": []map[string]any{{"name": "--command <name>", "summary": "OpenCode command name"}, {"name": "--agent <name>", "summary": "OpenCode agent name"}, {"name": "--every <duration>", "summary": "Go duration such as 5s, 1m, or 2h"}, {"name": "--workdir <dir>", "summary": "OpenCode working directory"}, {"name": "--schedule-id <id>", "summary": "optional safe schedule identifier (default: derived from command, agent, interval, and workdir)"}, {"name": "--full", "summary": "emit complete structured YAML job metadata (default: false)"}}, "fullSchema": "create-full"},
 		{"command": "put", "summary": "upsert a schedule job from JSON stdin", "usage": "sched put --stdin [--full]", "output": "Default stdout is terminal text for operators; use --full for complete structured YAML job metadata.", "flags": []map[string]any{{"name": "--stdin", "summary": "read job JSON from stdin (default: false)"}, {"name": "--full", "summary": "emit complete structured YAML job metadata (default: false)"}}, "fullSchema": "put-full"},
+		{"command": "put-many", "summary": "upsert schedule jobs from a JSON array", "usage": "sched put-many --stdin [--full]", "output": "Default stdout is a terminal table; use --full for ordered structured YAML job metadata.", "flags": []map[string]any{{"name": "--stdin", "summary": "read job array JSON from stdin (default: false)"}, {"name": "--full", "summary": "emit complete structured YAML job metadata (default: false)"}}, "fullSchema": "put-many-full"},
 		{"command": "get", "summary": "read one schedule job", "usage": "sched get <scheduleId> [--full]", "output": "Default stdout is terminal text for operators; use --full for complete structured YAML job metadata.", "flags": []map[string]any{{"name": "--full", "summary": "emit complete structured YAML job metadata (default: false)"}}, "fullSchema": "get-full"},
 		{"command": "list", "summary": "list schedule jobs", "usage": "sched list [--full]", "output": "Default stdout is a terminal table for operators; use --full for structured YAML job records.", "flags": []map[string]any{{"name": "--full", "summary": "emit complete structured YAML job metadata (default: false)"}}, "fullSchema": "list-full"},
 		{"command": "delete", "summary": "delete one schedule job and reconcile units", "usage": "sched delete <scheduleId> [--full]", "output": "Default stdout is terminal text for operators; use --full for the structured YAML deletion result.", "flags": []map[string]any{{"name": "--full", "summary": "emit structured YAML deletion result (default: false)"}}, "fullSchema": "delete-full"},
@@ -850,7 +909,7 @@ func commandHelps() []map[string]any {
 		{"command": "stop", "summary": "stop active systemd work for a schedule", "usage": "sched stop <scheduleId> [--full]", "output": "Default stdout is terminal text for operators; use --full for the structured YAML stop result.", "flags": []map[string]any{{"name": "--full", "summary": "emit structured YAML stop result (default: false)"}}, "fullSchema": "stop-full"},
 		{"command": "history", "summary": "list scheduler envelope run history", "usage": historyUsage + " [--full]", "output": "Default stdout is a terminal table for operators; use --full for structured YAML run records.", "flags": []map[string]any{{"name": "--schedule-id <scheduleId>", "summary": "filter by schedule"}, {"name": "--limit N", "summary": "maximum records (default: 100)"}, {"name": "--full", "summary": "emit complete structured YAML run metadata (default: false)"}}, "fullSchema": "history-full"},
 		{"command": "export", "summary": "export schedule state", "usage": "sched export", "output": "Output is structured YAML for state transfer.", "schema": "export"},
-		{"command": "systemd reconcile", "summary": "render and reconcile user-systemd units", "usage": "sched systemd reconcile [--full]", "output": "Default stdout is terminal sections for operators; use --full for structured YAML reconciliation metadata.", "flags": []map[string]any{{"name": "--full", "summary": "emit complete structured YAML reconciliation metadata (default: false)"}}, "fullSchema": "systemd/reconcile-full"},
+		{"command": "systemd reconcile", "summary": "render and reconcile user-systemd units", "usage": "sched systemd reconcile [--from-repo <dir> --repo-root <absolute-path>] [--full]", "output": "Default stdout is terminal sections for operators; use --full for structured YAML reconciliation metadata.", "flags": []map[string]any{{"name": "--from-repo <dir>", "summary": "read checked-in operator systemd units from a repo directory"}, {"name": "--repo-root <absolute-path>", "summary": "durable repository root used to render operator units"}, {"name": "--full", "summary": "emit complete structured YAML reconciliation metadata (default: false)"}}, "fullSchema": "systemd/reconcile-full"},
 		{"command": "schemas", "summary": "list output schemas", "usage": "sched schemas", "output": "Output is structured YAML schema discovery with descriptions.", "schema": "schemas"},
 	}
 }
@@ -864,6 +923,7 @@ func schemaDiscovery() map[string]any {
 			{"id": "error", "path": "spec/outputs/error.schema.yaml", "description": "structured YAML error envelope", "format": "yaml"},
 			{"id": "create-full", "path": "spec/outputs/create-full.schema.yaml", "description": "complete structured created job metadata", "format": "yaml"},
 			{"id": "put-full", "path": "spec/outputs/put-full.schema.yaml", "description": "complete structured upserted job metadata", "format": "yaml"},
+			{"id": "put-many-full", "path": "spec/outputs/put-many-full.schema.yaml", "description": "ordered structured bulk-upserted job metadata", "format": "yaml"},
 			{"id": "get-full", "path": "spec/outputs/get-full.schema.yaml", "description": "complete structured job metadata", "format": "yaml"},
 			{"id": "list-full", "path": "spec/outputs/list-full.schema.yaml", "description": "structured schedule records", "format": "yaml"},
 			{"id": "delete-full", "path": "spec/outputs/delete-full.schema.yaml", "description": "structured deletion result", "format": "yaml"},

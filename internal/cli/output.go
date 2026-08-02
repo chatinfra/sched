@@ -179,6 +179,7 @@ func rootHelpExamples() []string {
 		"sched create --command hello --agent syslog --every 5s --workdir /data/opencode/work",
 		"sched list",
 		"sched systemd reconcile --full",
+		"sched systemd reconcile --from-repo systemd/user --repo-root /home/operator/super --dry-run",
 	}
 }
 
@@ -234,6 +235,8 @@ func commandExamples(command string) []string {
 		return []string{"sched create --command hello --agent syslog --every 5s --workdir /data/opencode/work"}
 	case "put":
 		return []string{"sched put --stdin --full < job.json"}
+	case "put-many":
+		return []string{"sched put-many --stdin --full < jobs.json"}
 	case "get":
 		return []string{"sched get sched-1", "sched get sched-1 --full"}
 	case "list":
@@ -249,7 +252,7 @@ func commandExamples(command string) []string {
 	case "export":
 		return []string{"sched export > sched-state.yaml"}
 	case "systemd reconcile":
-		return []string{"sched systemd reconcile", "sched systemd reconcile --full"}
+		return []string{"sched systemd reconcile", "sched systemd reconcile --from-repo systemd/user --repo-root /home/operator/super --dry-run", "sched systemd reconcile --full"}
 	case "schemas":
 		return []string{"sched schemas"}
 	default:

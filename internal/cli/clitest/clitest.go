@@ -276,6 +276,36 @@ func ValidateSchema(t *testing.T, doc any, schemaPath string) {
 	}
 }
 
+func RequireSchemaDiscoveryPaths(t *testing.T, doc any) {
+	t.Helper()
+	root, ok := doc.(map[string]any)
+	if !ok {
+		t.Fatalf("schemas doc = %#v; want map", doc)
+	}
+	schemas, ok := root["schemas"].([]any)
+	if !ok {
+		t.Fatalf("schemas field = %#v; want list", root["schemas"])
+	}
+	rootDir := moduleRoot(t)
+	for _, item := range schemas {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("schema entry = %#v; want map", item)
+		}
+		id, _ := entry["id"].(string)
+		path, _ := entry["path"].(string)
+		if id == "" || path == "" {
+			t.Fatalf("schema entry missing id or path: %#v", entry)
+		}
+		if !strings.HasPrefix(path, "spec/outputs/") {
+			t.Fatalf("schema path %q for id %q is outside spec/outputs", path, id)
+		}
+		if _, err := os.Stat(filepath.Join(rootDir, filepath.FromSlash(path))); err != nil {
+			t.Fatalf("schema path %q for id %q does not exist: %v", path, id, err)
+		}
+	}
+}
+
 func normalizeYAML(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:

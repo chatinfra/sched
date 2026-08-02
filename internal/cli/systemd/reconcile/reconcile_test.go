@@ -143,6 +143,69 @@ func TestReconcileUsesConfiguredStableSchedLauncherPath(t *testing.T) {
 	}
 }
 
+func TestReconcileFromRepoFlagWiring(t *testing.T) {
+	h := clitest.New(t)
+	repoUnitDir := writeCLIRepoOperatorUnitPair(t, h.Root, "operator-cli", "operator-cli", "/bin/true")
+
+	result := h.Run(t, "--dry-run", "systemd", "reconcile", "--from-repo", repoUnitDir, "--repo-root", h.Root).RequireSuccess(t)
+	stdout := clitest.RequireTextStdout(t, result)
+	if !strings.Contains(stdout, "Dry run: true") || !strings.Contains(stdout, "operator-cli") || !strings.Contains(stdout, "operator-cli.timer") {
+		t.Fatalf("from-repo dry-run output = %s", stdout)
+	}
+	for _, name := range []string{"operator-cli.service", "operator-cli.timer"} {
+		if _, err := os.Stat(filepath.Join(h.SystemdDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("dry-run wrote %s or stat failed: %v", name, err)
+		}
+	}
+	full := h.Run(t, "--dry-run", "systemd", "reconcile", "--from-repo", repoUnitDir, "--repo-root", h.Root, "--full").RequireSuccess(t)
+	clitest.RequireYAMLStdout(t, full, "systemd/reconcile-full.schema.yaml")
+	reconciled := clitest.DecodeYAMLAs[sched.ReconcileResult](t, full.Stdout)
+	if len(reconciled.Units) != 1 || reconciled.Units[0].ScheduleID != "operator-cli" || !reconciled.DryRun {
+		t.Fatalf("full from-repo reconcile = %#v", reconciled)
+	}
+}
+
+func TestReconcileFromRepoRequiresRepoRoot(t *testing.T) {
+	h := clitest.New(t)
+	repoUnitDir := writeCLIRepoOperatorUnitPair(t, h.Root, "operator-missing-root", "operator-missing-root", "/bin/true")
+
+	result := h.Run(t, "systemd", "reconcile", "--from-repo", repoUnitDir).RequireError(t)
+	clitest.RequireYAMLError(t, result, "error.schema.yaml")
+	envelope := clitest.DecodeYAMLAs[clitest.ErrorEnvelope](t, result.Stderr)
+	if envelope.Error.Code != "missing_repo_root" || envelope.Error.Argument != "--repo-root" {
+		t.Fatalf("missing repo root envelope = %#v", envelope.Error)
+	}
+	if result.Stdout != "" {
+		t.Fatalf("missing repo root stdout = %q", result.Stdout)
+	}
+	for _, name := range []string{"operator-missing-root.service", "operator-missing-root.timer"} {
+		if _, err := os.Stat(filepath.Join(h.SystemdDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("missing-root rejection wrote %s or stat failed: %v", name, err)
+		}
+	}
+}
+
+func TestReconcileDryRunReportsExecStartRejectionWithoutWriting(t *testing.T) {
+	h := clitest.New(t)
+	missingExecutable := filepath.Join(clitest.TempDir(t, "sched-missing-exec-*"), "missing")
+	repoUnitDir := writeCLIRepoOperatorUnitPair(t, h.Root, "operator-invalid-exec", "operator-invalid-exec", missingExecutable)
+
+	result := h.Run(t, "--dry-run", "systemd", "reconcile", "--from-repo", repoUnitDir, "--repo-root", h.Root).RequireError(t)
+	clitest.RequireYAMLError(t, result, "error.schema.yaml")
+	envelope := clitest.DecodeYAMLAs[clitest.ErrorEnvelope](t, result.Stderr)
+	if envelope.Error.Code != "invalid_exec_start" || !strings.Contains(envelope.Error.Message, "operator-invalid-exec.service") {
+		t.Fatalf("dry-run rejection envelope = %#v", envelope.Error)
+	}
+	if result.Stdout != "" {
+		t.Fatalf("dry-run rejection stdout = %q", result.Stdout)
+	}
+	for _, name := range []string{"operator-invalid-exec.service", "operator-invalid-exec.timer"} {
+		if _, err := os.Stat(filepath.Join(h.SystemdDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("dry-run rejection wrote %s or stat failed: %v", name, err)
+		}
+	}
+}
+
 func TestReconcileEmptySectionsUseTerminalText(t *testing.T) {
 	h := clitest.New(t)
 
@@ -177,4 +240,24 @@ func sectionBetween(value, start, end string) string {
 		return value
 	}
 	return value[:endIndex]
+}
+
+func writeCLIRepoOperatorUnitPair(t *testing.T, repoRoot, base, id, execPath string) string {
+	t.Helper()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	repoUnitDir := filepath.Join(repoRoot, "systemd", "user")
+	if err := os.MkdirAll(repoUnitDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(repoUnitDir) error = %v", err)
+	}
+	service := "[Unit]\nDescription=operator cli service\n\n[Service]\nType=oneshot\nWorkingDirectory=@REPO_ROOT@\nEnvironmentFile=-@REPO_ROOT@/.env\nExecStart=" + execPath + "\n\n[X-Sched]\nManaged=true\nId=" + id + "\n"
+	timer := "[Unit]\nDescription=operator cli timer\n\n[Timer]\nUnit=" + base + ".service\nOnCalendar=*-*-* 05:00:00 UTC\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n\n[X-Sched]\nManaged=true\nId=" + id + "\n"
+	if err := os.WriteFile(filepath.Join(repoUnitDir, base+".service"), []byte(service), 0o644); err != nil {
+		t.Fatalf("WriteFile(service) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoUnitDir, base+".timer"), []byte(timer), 0o644); err != nil {
+		t.Fatalf("WriteFile(timer) error = %v", err)
+	}
+	return repoUnitDir
 }
