@@ -651,6 +651,10 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 			if !strings.Contains(content, "ExecStart=/usr/bin/python3 bin/reap_idle_daemons --apply") {
 				t.Fatalf("checked-in reaper ExecStart unexpected:\n%s", content)
 			}
+		case "reap-idle-lsp-servers.service":
+			if !strings.Contains(content, "ExecStart=/usr/bin/python3 bin/reap_idle_lsp_servers --apply") {
+				t.Fatalf("checked-in LSP reaper ExecStart unexpected:\n%s", content)
+			}
 		}
 		content = strings.ReplaceAll(content, "/usr/local/bin/cicl", "/bin/true")
 		content = strings.ReplaceAll(content, "/usr/bin/python3", "/bin/true")
@@ -664,10 +668,10 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileSystemd(dry-run) error = %v", err)
 	}
-	if len(result.Units) != 2 || !result.DryRun {
+	if len(result.Units) != 3 || !result.DryRun {
 		t.Fatalf("dry-run result = %#v", result)
 	}
-	for _, name := range []string{"cicl-backup-c0.service", "reap-idle-build-daemons.service"} {
+	for _, name := range []string{"cicl-backup-c0.service", "reap-idle-build-daemons.service", "reap-idle-lsp-servers.service"} {
 		if _, err := os.Stat(filepath.Join(unitDir, name)); !os.IsNotExist(err) {
 			t.Fatalf("dry-run wrote %s: %v", name, err)
 		}
@@ -676,7 +680,7 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repoOperatorUnitPlans() error = %v", err)
 	}
-	if len(warnings) != 0 || len(plans) != 2 {
+	if len(warnings) != 0 || len(plans) != 3 {
 		t.Fatalf("repo plans = %#v warnings=%#v", plans, warnings)
 	}
 	byID := map[string]UnitPlan{}
@@ -716,6 +720,15 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 	for _, want := range []string{"OnBootSec=2min", "OnUnitActiveSec=2min", "Persistent=false"} {
 		if !strings.Contains(reaper.TimerContent, want) {
 			t.Fatalf("reaper timer missing %q:\n%s", want, reaper.TimerContent)
+		}
+	}
+	lspReaper := byID["reap-idle-lsp-servers"]
+	if !strings.Contains(lspReaper.ServiceContent, "ExecStart=/bin/true bin/reap_idle_lsp_servers --apply") || strings.Contains(lspReaper.ServiceContent, "sched run") {
+		t.Fatalf("LSP reaper service content unexpected:\n%s", lspReaper.ServiceContent)
+	}
+	for _, want := range []string{"OnBootSec=5min", "OnUnitActiveSec=15min", "Persistent=false"} {
+		if !strings.Contains(lspReaper.TimerContent, want) {
+			t.Fatalf("LSP reaper timer missing %q:\n%s", want, lspReaper.TimerContent)
 		}
 	}
 }
