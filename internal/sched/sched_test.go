@@ -644,8 +644,12 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 		content := string(data)
 		switch entry.Name() {
 		case "cicl-backup-c0.service":
-			if !strings.Contains(content, "ExecStart=/usr/local/bin/cicl backup create --id c0") {
+			if !strings.Contains(content, "ExecStart=/usr/local/bin/cicl backup create --id c0 --prune") {
 				t.Fatalf("checked-in c0 ExecStart unexpected:\n%s", content)
+			}
+		case "cicl-backup-secrets-c0.service":
+			if !strings.Contains(content, "ExecStart=/usr/local/bin/cicl backup-secrets --id c0") {
+				t.Fatalf("checked-in c0 secrets ExecStart unexpected:\n%s", content)
 			}
 		case "reap-idle-build-daemons.service":
 			if !strings.Contains(content, "ExecStart=/usr/bin/python3 bin/reap_idle_daemons --apply") {
@@ -668,10 +672,10 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileSystemd(dry-run) error = %v", err)
 	}
-	if len(result.Units) != 3 || !result.DryRun {
+	if len(result.Units) != 4 || !result.DryRun {
 		t.Fatalf("dry-run result = %#v", result)
 	}
-	for _, name := range []string{"cicl-backup-c0.service", "reap-idle-build-daemons.service", "reap-idle-lsp-servers.service"} {
+	for _, name := range []string{"cicl-backup-c0.service", "cicl-backup-secrets-c0.service", "reap-idle-build-daemons.service", "reap-idle-lsp-servers.service"} {
 		if _, err := os.Stat(filepath.Join(unitDir, name)); !os.IsNotExist(err) {
 			t.Fatalf("dry-run wrote %s: %v", name, err)
 		}
@@ -680,7 +684,7 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repoOperatorUnitPlans() error = %v", err)
 	}
-	if len(warnings) != 0 || len(plans) != 3 {
+	if len(warnings) != 0 || len(plans) != 4 {
 		t.Fatalf("repo plans = %#v warnings=%#v", plans, warnings)
 	}
 	byID := map[string]UnitPlan{}
@@ -707,11 +711,18 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 		t.Fatalf("%s plan must remain absent: a cicl-backup-<id> pair may only be checked in once cicl status --id <id> exits zero", orphanedScheduleID)
 	}
 	cicl := byID["cicl-backup-c0"]
-	if !strings.Contains(cicl.ServiceContent, "ExecStart=/bin/true backup create --id c0") || strings.Contains(cicl.ServiceContent, "sched run") {
+	if !strings.Contains(cicl.ServiceContent, "ExecStart=/bin/true backup create --id c0 --prune") || strings.Contains(cicl.ServiceContent, "sched run") {
 		t.Fatalf("cicl service content unexpected:\n%s", cicl.ServiceContent)
 	}
 	if !strings.Contains(cicl.TimerContent, "OnCalendar=*-*-* 02:00:00 UTC") || !strings.Contains(cicl.TimerContent, "Persistent=true") {
 		t.Fatalf("cicl timer content unexpected:\n%s", cicl.TimerContent)
+	}
+	ciclSecrets := byID["cicl-backup-secrets-c0"]
+	if !strings.Contains(ciclSecrets.ServiceContent, "ExecStart=/bin/true backup-secrets --id c0") || strings.Contains(ciclSecrets.ServiceContent, "sched run") {
+		t.Fatalf("cicl secrets service content unexpected:\n%s", ciclSecrets.ServiceContent)
+	}
+	if !strings.Contains(ciclSecrets.TimerContent, "OnCalendar=*-*-* 03:00:00 UTC") || !strings.Contains(ciclSecrets.TimerContent, "Persistent=true") {
+		t.Fatalf("cicl secrets timer content unexpected:\n%s", ciclSecrets.TimerContent)
 	}
 	reaper := byID["reap-idle-build-daemons"]
 	if !strings.Contains(reaper.ServiceContent, "ExecStart=/bin/true bin/reap_idle_daemons --apply") || strings.Contains(reaper.ServiceContent, "sched run") {
