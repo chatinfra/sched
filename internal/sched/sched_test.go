@@ -659,6 +659,10 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 			if !strings.Contains(content, "ExecStart=/usr/bin/python3 bin/reap_idle_lsp_servers --apply") {
 				t.Fatalf("checked-in LSP reaper ExecStart unexpected:\n%s", content)
 			}
+		case "cicl-worker-ownership-liveness-c0.service":
+			if !strings.Contains(content, "ExecStart=/usr/local/bin/cicl worker-ownership-liveness --id c0") {
+				t.Fatalf("checked-in c0 worker ownership liveness ExecStart unexpected:\n%s", content)
+			}
 		}
 		content = strings.ReplaceAll(content, "/usr/local/bin/cicl", "/bin/true")
 		content = strings.ReplaceAll(content, "/usr/bin/python3", "/bin/true")
@@ -672,10 +676,10 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileSystemd(dry-run) error = %v", err)
 	}
-	if len(result.Units) != 4 || !result.DryRun {
+	if len(result.Units) != 5 || !result.DryRun {
 		t.Fatalf("dry-run result = %#v", result)
 	}
-	for _, name := range []string{"cicl-backup-c0.service", "cicl-backup-secrets-c0.service", "reap-idle-build-daemons.service", "reap-idle-lsp-servers.service"} {
+	for _, name := range []string{"cicl-backup-c0.service", "cicl-backup-secrets-c0.service", "cicl-worker-ownership-liveness-c0.service", "reap-idle-build-daemons.service", "reap-idle-lsp-servers.service"} {
 		if _, err := os.Stat(filepath.Join(unitDir, name)); !os.IsNotExist(err) {
 			t.Fatalf("dry-run wrote %s: %v", name, err)
 		}
@@ -684,7 +688,7 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repoOperatorUnitPlans() error = %v", err)
 	}
-	if len(warnings) != 0 || len(plans) != 4 {
+	if len(warnings) != 0 || len(plans) != 5 {
 		t.Fatalf("repo plans = %#v warnings=%#v", plans, warnings)
 	}
 	byID := map[string]UnitPlan{}
@@ -723,6 +727,15 @@ func TestRepoOperatorUnitsRenderCleanly(t *testing.T) {
 	}
 	if !strings.Contains(ciclSecrets.TimerContent, "OnCalendar=*-*-* 03:00:00 UTC") || !strings.Contains(ciclSecrets.TimerContent, "Persistent=true") {
 		t.Fatalf("cicl secrets timer content unexpected:\n%s", ciclSecrets.TimerContent)
+	}
+	liveness := byID["cicl-worker-ownership-liveness-c0"]
+	if !strings.Contains(liveness.ServiceContent, "ExecStart=/bin/true worker-ownership-liveness --id c0") || strings.Contains(liveness.ServiceContent, "sched run") {
+		t.Fatalf("c0 worker ownership liveness service content unexpected:\n%s", liveness.ServiceContent)
+	}
+	for _, want := range []string{"OnCalendar=*:0/5", "Persistent=true", "WantedBy=timers.target"} {
+		if !strings.Contains(liveness.TimerContent, want) {
+			t.Fatalf("c0 worker ownership liveness timer missing %q:\n%s", want, liveness.TimerContent)
+		}
 	}
 	reaper := byID["reap-idle-build-daemons"]
 	if !strings.Contains(reaper.ServiceContent, "ExecStart=/bin/true bin/reap_idle_daemons --apply") || strings.Contains(reaper.ServiceContent, "sched run") {
